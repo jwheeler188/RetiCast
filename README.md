@@ -1,5 +1,7 @@
 # RetiCast
 
+Demo site: a6eaa98af0f97579edcfc83c39a72f0c:/page/reticast.mu
+
 Live US weather for your NomadNet node, from nothing but a Maidenhead grid square. RetiCast gives you two things:
 
 - **A full weather page** at `/page/reticast.mu` with active alerts, current conditions, and a 7-day forecast.
