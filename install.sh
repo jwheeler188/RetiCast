@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
-# install.sh - demo deployment of RetiCast, a live weather line for NomadNet pages.
+# install.sh - install or upgrade RetiCast 2.0 on a NomadNet node.
 #
-# Run as the same user that runs NomadNet:   ./install.sh
-# Non-interactive:   GRID=FN31pr CONTACT=you@example.com ./install.sh
-# Optional overrides: SCRIPTS_DIR, PAGES_DIR, PYTHON
-# Weather page only (leave your home page alone):   HOME_PAGE=no ./install.sh
+# Run as the same user that runs NomadNet (no sudo):   ./install.sh
 #
-# Safe to re-run: existing header/body/about files are never overwritten,
-# the old index.mu is backed up, and the cron job is only added once.
+# Non-interactive:
+#   LOCATION=EM20fb CONTACT=you@example.com ./install.sh
+#
+# Options (all optional):
+#   LOCATION     default location for visitors: grid square, "City, ST", ZIP, or "lat,lon"
+#   GRID         same as LOCATION (kept for RetiCast 1.x installs)
+#   CONTACT      email or callsign sent to the weather services
+#   UNITS        "us" or "metric"
+#   SCRIPTS_DIR  default ~/scripts
+#   PAGES_DIR    default ~/.nomadnetwork/storage/pages
+#   PYTHON       default: output of "which python3"
+#
+# Safe to re-run. Upgrading keeps your location, contact and units, backs up
+# the old reticast.py, keeps visitors' saved places, and adds the cron job once.
+#
+# License: Unlicense (public domain).
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
@@ -15,137 +26,168 @@ SCRIPTS_DIR="${SCRIPTS_DIR:-$HOME/scripts}"
 PAGES_DIR="${PAGES_DIR:-$HOME/.nomadnetwork/storage/pages}"
 PYTHON="${PYTHON:-$(command -v python3 || true)}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
-HOME_PAGE="${HOME_PAGE:-yes}"
 
 say()  { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 # --- checks -----------------------------------------------------------
+[ -f "$SRC/scripts/reticast.py" ] && [ -f "$SRC/pages/reticast.mu" ] \
+    || die "Run this from the RetiCast folder (scripts/reticast.py and pages/reticast.mu are missing)."
 [ -n "$PYTHON" ] && [ -x "$PYTHON" ] || die "python3 not found. Install Python 3.9+ or set PYTHON=/full/path/to/python3"
 "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' \
     || die "$PYTHON is older than 3.9 ($("$PYTHON" --version 2>&1))."
 [ -d "$PAGES_DIR" ] || die "NomadNet pages folder not found at $PAGES_DIR. Set PAGES_DIR=/path/to/pages"
 
-say "Python:        $PYTHON ($("$PYTHON" --version 2>&1))"
+say "RetiCast 2.0 installer"
+say "Python:         $PYTHON ($("$PYTHON" --version 2>&1))"
 say "Scripts folder: $SCRIPTS_DIR"
 say "Pages folder:   $PAGES_DIR"
 say ""
 
-# --- settings ---------------------------------------------------------
-GRID="${GRID:-}"
-if [ -z "$GRID" ]; then
-    read -rp "Your Maidenhead grid square [FN31pr]: " GRID
-    GRID="${GRID:-FN31pr}"
+# --- current settings (when upgrading) --------------------------------
+OLD_LOCATION=""; OLD_CONTACT=""; OLD_UNITS=""
+if [ -f "$SCRIPTS_DIR/reticast.py" ]; then
+    {
+        IFS= read -r OLD_LOCATION || true
+        IFS= read -r OLD_CONTACT || true
+        IFS= read -r OLD_UNITS || true
+    } < <("$PYTHON" - "$SCRIPTS_DIR/reticast.py" <<'PY'
+import re, sys
+try:
+    s = open(sys.argv[1], encoding="utf-8").read()
+except OSError:
+    s = ""
+def find(pattern):
+    m = re.search(pattern, s, re.M)
+    return m.group(1).replace("\n", " ").strip() if m else ""
+loc = find(r'^DEFAULT_LOCATION = "(.*?)"') or find(r'^GRIDSQUARE = "(.*?)"')   # 2.x or 1.x
+contact = find(r'^USER_AGENT = "\([^,]*,\s*(.*?)\)"')
+if contact == "you@example.com":
+    contact = ""
+units = find(r'^UNITS = "(.*?)"')
+print(loc); print(contact); print(units)
+PY
+)
+    [ -n "$OLD_LOCATION$OLD_CONTACT" ] && say "Found an existing RetiCast install; its settings are offered as defaults."
 fi
-[[ "$GRID" =~ ^[A-Ra-r]{2}([0-9]{2}([A-Xa-x]{2}([0-9]{2})?)?)?$ ]] || die "'$GRID' is not a valid grid square (e.g. FN31 or FN31pr)."
+
+# --- settings ---------------------------------------------------------
+LOCATION="${LOCATION:-${GRID:-}}"
+if [ -z "$LOCATION" ]; then
+    say "Default location: what visitors see before they save their own."
+    say "  Examples: EM20fb   Houston, TX   77002   29.76,-95.37"
+    while [ -z "$LOCATION" ]; do
+        if [ -n "$OLD_LOCATION" ]; then
+            read -rp "Default location [$OLD_LOCATION]: " LOCATION
+            LOCATION="${LOCATION:-$OLD_LOCATION}"
+        else
+            read -rp "Default location (required): " LOCATION
+        fi
+    done
+fi
 
 CONTACT="${CONTACT:-}"
 while [ -z "$CONTACT" ]; do
-    read -rp "Email or callsign for the NWS User-Agent (required): " CONTACT
+    if [ -n "$OLD_CONTACT" ]; then
+        read -rp "Email or callsign sent to the weather services [$OLD_CONTACT]: " CONTACT
+        CONTACT="${CONTACT:-$OLD_CONTACT}"
+    else
+        read -rp "Email or callsign sent to the weather services (required): " CONTACT
+    fi
 done
 
-# --- weather script ---------------------------------------------------
+UNITS="${UNITS:-${OLD_UNITS:-us}}"
+case "$UNITS" in
+    us|US) UNITS="us" ;;
+    metric|METRIC) UNITS="metric" ;;
+    *) die "UNITS must be \"us\" or \"metric\" (got \"$UNITS\")." ;;
+esac
+
+# --- script -----------------------------------------------------------
 mkdir -p "$SCRIPTS_DIR"
 if [ -f "$SCRIPTS_DIR/reticast.py" ]; then
     cp "$SCRIPTS_DIR/reticast.py" "$SCRIPTS_DIR/reticast.py.bak.$STAMP"
-    say "Backed up existing reticast.py"
+    say "Backed up the existing reticast.py to reticast.py.bak.$STAMP"
 fi
-cp "$SRC/scripts/reticast.py" "$SCRIPTS_DIR/reticast.py"
-
-"$PYTHON" - "$SCRIPTS_DIR/reticast.py" "$PYTHON" "$GRID" "$CONTACT" <<'PY'
-import re, sys
-path, python, grid, contact = sys.argv[1:]
-contact = contact.replace("\\", "").replace('"', "")
+cp "$SRC/scripts/reticast.py" "$SCRIPTS_DIR/reticast.py.new"
+"$PYTHON" - "$SCRIPTS_DIR/reticast.py.new" "$PYTHON" "$LOCATION" "$CONTACT" "$UNITS" <<'PY'
+import json, re, sys
+path, python, location, contact, units = sys.argv[1:]
+clean = lambda v: re.sub(r'[\\"\x00-\x1f]', "", v).strip()
+location, contact = clean(location), clean(contact)
 s = open(path, encoding="utf-8").read()
+def setting(name, value):
+    global s
+    s, n = re.subn(rf"^{name} = .*?(\s+#.*)?$",
+                   lambda m: f"{name} = {json.dumps(value, ensure_ascii=False)}" + (m.group(1) or ""),
+                   s, count=1, flags=re.M)
+    if n != 1:
+        sys.exit(f"could not set {name}")
 s = re.sub(r"^#!.*", lambda m: "#!" + python, s, count=1)
-s = re.sub(r'^GRIDSQUARE = ".*?"', lambda m: f'GRIDSQUARE = "{grid}"', s, count=1, flags=re.M)
-s = re.sub(r'^USER_AGENT = ".*?"',
-           lambda m: f'USER_AGENT = "(RetiCast, {contact})"', s, count=1, flags=re.M)
+setting("DEFAULT_LOCATION", location)
+setting("USER_AGENT", f"(RetiCast, {contact})")
+setting("UNITS", units)
 open(path, "w", encoding="utf-8").write(s)
 PY
-chmod +x "$SCRIPTS_DIR/reticast.py"
-rm -f "$SCRIPTS_DIR/reticast_cache.json"
-say "Installed $SCRIPTS_DIR/reticast.py (grid $GRID)"
+chmod +x "$SCRIPTS_DIR/reticast.py.new"
+mv "$SCRIPTS_DIR/reticast.py.new" "$SCRIPTS_DIR/reticast.py"
+say "Installed $SCRIPTS_DIR/reticast.py"
 
-# --- page installer helper ------------------------------------------
-install_page() {   # install_page <repo page> <dest page>
-    "$PYTHON" - "$1" "$2" "$PYTHON" "$SCRIPTS_DIR" <<'PY'
+# RetiCast 1.x cache (2.0 keeps its data in reticast_data/)
+if [ -f "$SCRIPTS_DIR/reticast_cache.json" ]; then
+    rm -f "$SCRIPTS_DIR/reticast_cache.json"
+    say "Removed the old RetiCast 1.x cache"
+fi
+# a changed DEFAULT_LOCATION is looked up again automatically; nothing else to clear
+
+# --- page -------------------------------------------------------------
+if [ -e "$PAGES_DIR/reticast.mu" ] && ! grep -qE "import reticast|from reticast import" "$PAGES_DIR/reticast.mu"; then
+    cp "$PAGES_DIR/reticast.mu" "$SCRIPTS_DIR/reticast.mu.backup.$STAMP"
+    say "Backed up an unrelated reticast.mu to $SCRIPTS_DIR/reticast.mu.backup.$STAMP"
+fi
+"$PYTHON" - "$SRC/pages/reticast.mu" "$PAGES_DIR/reticast.mu" "$PYTHON" "$SCRIPTS_DIR" <<'PY'
 import re, sys
 src, dst, python, scripts_dir = sys.argv[1:]
 s = open(src, encoding="utf-8").read()
 s = re.sub(r"^#!.*", lambda m: "#!" + python, s, count=1)
-s = re.sub(r"^(PARTS_DIR|SCRIPTS_DIR) = .*$", lambda m: f"{m.group(1)} = {scripts_dir!r}",
-           s, count=1, flags=re.M)
+s, n = re.subn(r"^SCRIPTS_DIR = .*$", lambda m: f"SCRIPTS_DIR = {scripts_dir!r}", s, count=1, flags=re.M)
+if n != 1:
+    sys.exit("could not set SCRIPTS_DIR in reticast.mu")
 open(dst, "w", encoding="utf-8").write(s)
 PY
-    chmod +x "$2"
-}
-
-# --- full weather page ------------------------------------------------
-if [ -e "$PAGES_DIR/reticast.mu" ] && ! grep -q "from reticast import" "$PAGES_DIR/reticast.mu"; then
-    cp "$PAGES_DIR/reticast.mu" "$SCRIPTS_DIR/reticast.mu.backup.$STAMP"
-    say "Backed up an unrelated reticast.mu to $SCRIPTS_DIR/reticast.mu.backup.$STAMP"
-fi
-install_page "$SRC/pages/reticast.mu" "$PAGES_DIR/reticast.mu"
-say "Installed $PAGES_DIR/reticast.mu (full weather page)"
-
-# --- home page demo (skip with HOME_PAGE=no) ----------------------------
-if [ "$HOME_PAGE" = "yes" ]; then
-    for f in index_header.mu index_body.mu; do
-        if [ -e "$SCRIPTS_DIR/$f" ]; then
-            say "Kept existing $SCRIPTS_DIR/$f"
-        else
-            cp "$SRC/scripts/$f" "$SCRIPTS_DIR/$f"
-            say "Installed demo $SCRIPTS_DIR/$f"
-        fi
-    done
-    if [ -e "$PAGES_DIR/index.mu" ]; then
-        if grep -q "from reticast import\|from nomadweather import" "$PAGES_DIR/index.mu"; then
-            say "index.mu is already a RetiCast page script; updating it"
-        else
-            cp "$PAGES_DIR/index.mu" "$SCRIPTS_DIR/index.mu.backup.$STAMP"
-            say "Backed up your old index.mu to $SCRIPTS_DIR/index.mu.backup.$STAMP"
-        fi
-    fi
-    install_page "$SRC/pages/index.mu" "$PAGES_DIR/index.mu"
-    say "Installed $PAGES_DIR/index.mu"
-    if [ -e "$PAGES_DIR/about.mu" ]; then
-        say "Kept existing $PAGES_DIR/about.mu"
-    else
-        cp "$SRC/pages/about.mu" "$PAGES_DIR/about.mu"
-        say "Installed demo $PAGES_DIR/about.mu"
-    fi
-else
-    say "Skipped the home page demo (HOME_PAGE=no); your index.mu was not touched"
-fi
+chmod +x "$PAGES_DIR/reticast.mu"
+say "Installed $PAGES_DIR/reticast.mu"
 
 # --- test run ---------------------------------------------------------
 say ""
+[ -w "$SCRIPTS_DIR" ] || warn "$SCRIPTS_DIR is not writable by $(whoami); RetiCast can't save its data."
+say "Checking the default location:"
+if ! "$PYTHON" "$SCRIPTS_DIR/reticast.py" --check; then
+    warn "Couldn't look up \"$LOCATION\". Check the spelling (try adding a state, e.g. \"Paris, TX\"),"
+    warn "or your internet connection, then run the installer again."
+fi
+say ""
 say "Test run:"
 "$PYTHON" "$SCRIPTS_DIR/reticast.py" --debug || warn "Test run failed; see output above."
-[ -w "$SCRIPTS_DIR" ] || warn "$SCRIPTS_DIR is not writable by $(whoami); the cache file cannot be saved."
 
-# --- cron -------------------------------------------------------------
+# --- cron: refresh every 5 minutes so pages load instantly --------------
 say ""
 JOB="*/5 * * * * $PYTHON $SCRIPTS_DIR/reticast.py > /dev/null 2>&1"
 if ! command -v crontab >/dev/null 2>&1; then
-    warn "crontab not found. Add this job manually:  $JOB"
-elif crontab -l 2>/dev/null | grep -Fq "nomadweather.py"; then
-    { crontab -l 2>/dev/null | grep -Fv "nomadweather.py" || true; echo "$JOB"; } | crontab -
-    say "Replaced old nomadweather.py cron job with RetiCast"
-elif crontab -l 2>/dev/null | grep -Fq "$SCRIPTS_DIR/reticast.py"; then
-    say "Cron job already present (crontab -l to view)"
+    warn "crontab not found. Add this line to your scheduler yourself:"
+    say "    $JOB"
+elif crontab -l 2>/dev/null | grep -Fxq "$JOB"; then
+    say "Cron job already present."
 else
-    { crontab -l 2>/dev/null || true; echo "$JOB"; } | crontab -
-    say "Added cron job: refresh every 5 minutes"
+    # replace any older RetiCast / NomadWeather job instead of adding a second one
+    { crontab -l 2>/dev/null | grep -Fv "reticast.py" | grep -Fv "nomadweather.py" || true; echo "$JOB"; } | crontab -
+    say "Cron job installed (every 5 minutes)."
 fi
 
 say ""
-say "Done. Restart NomadNet so it picks up the new pages, for example:"
-say "    sudo systemctl restart nomadnet     (or your own service name / start method)"
-say "Then open /page/reticast.mu on your node for the full weather page."
+say "Done. Open /page/reticast.mu on your node. If this is a new install,"
+say "restart NomadNet so it sees the new page."
 say "To link to it from your own pages:"
 say '    `[Weather`:/page/reticast.mu]'
-[ "$HOME_PAGE" = "yes" ] && say "Edit your home page in $SCRIPTS_DIR/index_header.mu and $SCRIPTS_DIR/index_body.mu."
 exit 0

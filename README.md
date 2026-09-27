@@ -1,117 +1,81 @@
-# RetiCast
+# RetiCast 2.0
 
-Demo site: a6eaa98af0f97579edcfc83c39a72f0c:/page/reticast.mu
+Live weather for your NomadNet node, for any place in the world.
 
-Live US weather for your NomadNet node, from nothing but a Maidenhead grid square. RetiCast gives you two things:
+Visitors can look up the weather anywhere by city, city and state, US ZIP code, grid square, or latitude/longitude. Visitors who identify to your node can save a default location and up to 5 favorites. They can also choose whether RetiCast opens on their default location or on an overview of all their saved places. Everyone else sees the default location you choose for your node.
 
-- **A full weather page** at `/page/reticast.mu` with active alerts, current conditions, and a 7-day forecast.
-- **A one-line summary** you can put on your home page or any other page.
+US locations get active watches, warnings, and advisories, current conditions, and a 7-day forecast from the National Weather Service. Places outside the US get current conditions and a 7-day forecast from Open-Meteo. No API keys are needed, and RetiCast uses only the Python standard library.
 
-Both come from the National Weather Service, refresh automatically, and load instantly because visitors are always served saved data.
+## Screenshots
 
-## What it looks like
+The weather page for a visitor's default location, with an active alert and the "Read full alert" link:
 
-The weather page (in a NomadNet client, warnings are red, watches orange, and advisories yellow):
+![Weather page with an active alert](docs/screenshots/weather-view.png)
 
-```
-Weather for Hartford County, Connecticut (FN31pr)
+Further down the same page, current conditions and the 7-day forecast:
 
-updated 3:05PM 09/24/2026  |  station KHFD (Hartford-Brainard Airport)
+![Current conditions and forecast](docs/screenshots/weather-forecast.png)
 
-  Active Alerts
-  SEVERE THUNDERSTORM WARNING  until 3:30PM Thu
-  Severe Thunderstorm Warning issued September 24 at 2:41PM EDT until 3:30PM EDT by NWS Boston
-  At 241 PM EDT, a severe thunderstorm was located near West Hartford, moving east at 25 mph.
-  What to do: For your protection move to an interior room on the lowest floor of a building.
-  Read full alert
+The overview, which shows a short summary for each saved place:
 
-  Current Conditions
-  Partly Cloudy
-  Temperature  88F (feels like 94F)
-  Humidity     57%
-  Dew point    71F
-  Wind         SW 9 mph, gusts 18 mph
-  Pressure     30.02 inHg
-  Visibility   10 mi
+![Overview of saved places](docs/screenshots/overview.png)
 
-  Forecast
-  This Afternoon  High 88F  Precip 60%  Showers And Thunderstorms
-  Tonight         Low 71F   Precip 20%  Partly Cloudy
-  Friday          High 82F              Sunny
-  ...
+My Places, where visitors manage their default location and favorites, and choose what RetiCast opens on:
 
-Data: National Weather Service (weather.gov)
-```
+![My Places](docs/screenshots/my-places.png)
 
-The one-line summary:
-
-```
-Current weather conditions for gridsquare FN31pr (Hartford County, Connecticut) @ 3PM 09/24/2026: Temp. 88F, Humidity 57%, Partly Cloudy, Warning/Watch: SEVERE THUNDERSTORM WARNING!!! (Expiring 3PM local time)
-```
-
-Watches and warnings are only added to the line when they're active.
+The screenshots are from the W5PL Piticulum node. The banner and menu at the top come from that node's own site header, which RetiCast shows automatically (see [Using your site header](#using-your-site-header)).
 
 ## Features
 
-- Works from a grid square alone. RetiCast finds the county, state, time zone, nearest weather stations, and forecast area for you.
-- Full weather page: every active alert with its details and safety instructions (long alerts are trimmed, with a "Read full alert" link to the complete text), current conditions including feels-like temperature, wind, pressure, and visibility, and a 7-day forecast.
-- US or metric units.
-- Fast page loads. A cron job refreshes the data every 5 minutes and saves it, so visitors never wait on the weather service.
-- Fails gracefully. If the weather service is unreachable, pages show the last good data, marked as cached, and still load.
-- Python standard library only. Nothing to `pip install`, and no API key.
+- **Search anywhere:** by city (`Paris`), city and state (`Austin TX` or `Paris, Texas`), US ZIP code (`77002` or `77002-1234`), Maidenhead grid square (`EM20fb`), or latitude/longitude (`29.76,-95.37`).
+- **Saved places for identified visitors:** one default location plus up to 5 favorites, remembered by the node.
+- **Choice of landing page:** each visitor chooses whether RetiCast opens on their default location or on an overview of all their saved places.
+- **Server default:** guests, and visitors who haven't saved a default, see the location you choose.
+- **Alerts (US):** every active watch, warning, and advisory, color coded (warnings red, watches orange, advisories yellow). Long alerts are trimmed, with a "Read full alert" link to the complete text.
+- **Current conditions:** temperature, feels like, humidity, dew point, wind and gusts, pressure, visibility, and the reporting station.
+- **7-day forecast:** day and night periods for US locations, and daily highs and lows elsewhere.
+- **Fast pages:** a cron job keeps the node's default and visitors' saved places up to date, so those pages load from saved data. If a weather service stops answering, RetiCast shows the last saved data and says so.
+- **One-line summary:** a function you can use to put the current weather on your home page or any other page.
+- **US or metric units.**
 
 ## Requirements
 
-- A NomadNet node, installed and running
-- Python 3.9 or newer
-- Internet access from the node
-- A location in the US or its territories (RetiCast uses the National Weather Service API)
-- An email address or callsign, which NWS requires every app to send
+- A NomadNet node, with RetiCast installed as the same user that runs NomadNet
+- Python 3.9 or newer (Raspberry Pi OS and current Linux distributions already have it)
+- Internet access from the node, for the weather services
+- `cron`, to keep the saved data fresh
 
 ## Install options
 
 There are two ways to install RetiCast. Both give the same result:
 
-- **Quick install:** run `install.sh`, which asks two questions and does everything for you. Best for most people.
-- **Manual install:** copy the files and set things up by hand. Use this if you want to see every step before it happens, or if your setup is unusual.
+- **Quick install:** run `install.sh`, which asks a few questions and does everything for you. This is best for most people.
+- **Manual install:** copy the files and set things up by hand. Use this if you want to see every step, or if your setup is unusual.
 
-The installer can set up just the weather page, or the weather page plus a demo home page that shows the one-line summary. See `HOME_PAGE` under [Installer options](#installer-options).
-
-Either way, install as the same user that runs NomadNet. Installing doesn't need `sudo`, though restarting a system-wide NomadNet service afterward may.
+Either way, install as the same user that runs NomadNet. RetiCast doesn't need `sudo`.
 
 ## Quick install
 
-Run as the same user that runs NomadNet:
-
 ```
-git clone <this repo URL>
+git clone https://github.com/jwheeler188/reticast.git
 cd reticast
 ./install.sh
 ```
 
-The installer asks for your grid square and your email or callsign. To skip the questions:
+The installer asks for two things:
 
-```
-GRID=FN31pr CONTACT=you@example.com ./install.sh
-```
+1. **The default location**, which is what visitors see before they save their own. Any search RetiCast accepts works, for example `EM20fb`, `Houston, TX`, `77002`, or `29.76,-95.37`.
+2. **An email address or callsign.** The National Weather Service asks every app to identify itself with a way to reach its operator. It's sent to the weather services only, and isn't shown to visitors.
 
-To install only the weather page and leave your existing home page alone:
+The installer then:
 
-```
-HOME_PAGE=no ./install.sh
-```
+- installs `reticast.py` in `~/scripts` and the page in your NomadNet pages folder
+- looks up your default location and shows what it found
+- does a test run
+- adds a cron job that refreshes the weather every 5 minutes
 
-### What the installer does
-
-1. Checks for Python 3.9+ and your NomadNet pages folder (`~/.nomadnetwork/storage/pages`).
-2. Installs `reticast.py` in `~/scripts` with your grid square, contact, and full Python path.
-3. Installs the weather page as `reticast.mu`. If you already have an unrelated page with that name, it's backed up to `~/scripts` first.
-4. Unless you set `HOME_PAGE=no`:
-    - installs the demo header and body in `~/scripts` (existing files are kept, never overwritten)
-    - backs up your current `index.mu` to `~/scripts/index.mu.backup.<date>`, then installs the demo home page
-    - adds a demo `about.mu` if you don't already have one
-5. Runs a test fetch with timing output.
-6. Adds a cron job that refreshes the weather every 5 minutes (only once, even if you rerun it).
+If this is a new install, restart NomadNet so it sees the new page. Then open `/page/reticast.mu` on your node.
 
 ### Installer options
 
@@ -119,211 +83,247 @@ Set any of these before `./install.sh` to change how it runs:
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `GRID` | asks | Your grid square; skips the question |
-| `CONTACT` | asks | Your email or callsign for NWS; skips the question |
-| `HOME_PAGE` | `yes` | `no` installs only the weather page and leaves `index.mu` alone |
-| `SCRIPTS_DIR` | `~/scripts` | Where `reticast.py` and the header and body files go |
+| `LOCATION` | asks | The default location for visitors; skips the question |
+| `GRID` | | Same as `LOCATION`; still accepted from RetiCast 1.x |
+| `CONTACT` | asks | Your email or callsign; skips the question |
+| `UNITS` | `us` | `us` (F, mph, inHg, miles) or `metric` (C, km/h, hPa, km) |
+| `SCRIPTS_DIR` | `~/scripts` | Where `reticast.py` and its data go |
 | `PAGES_DIR` | `~/.nomadnetwork/storage/pages` | Your NomadNet pages folder |
-| `PYTHON` | output of `which python3` | Python to use (3.9 or newer) |
+| `PYTHON` | output of `which python3` | The Python to use (3.9 or newer) |
 
-For example, to use a specific Python and a different scripts folder:
-
-```
-PYTHON=/usr/bin/python3 SCRIPTS_DIR=~/reticast-files ./install.sh
-```
-
-It's safe to run the installer again, for example to change your grid square. It keeps your own header, body, and About page, and it won't add a second cron job.
-
-### Restart NomadNet
-
-NomadNet registers its pages when it starts, so restart it after installing to make sure the new and updated pages are picked up. Later edits to your header and body files show up without a restart. If NomadNet runs as a systemd service:
+For example, to install without any questions:
 
 ```
-sudo systemctl restart nomadnet
+LOCATION=EM20fb CONTACT=W1AW ./install.sh
 ```
 
-Use your own unit name if it's different (check with `systemctl list-units | grep -i nomad`), or `systemctl --user restart nomadnet` for a user service. If you start NomadNet by hand, stop it and start it again.
-
-### Link to the weather page
-
-Open `/page/reticast.mu` on your node to check it, then link to it from your home page or menu:
-
-```
-`[Weather`:/page/reticast.mu]
-```
-
-The demo home page already links to it twice: from its menu, and from the word "Weather" at the start of the one-line summary.
+It's safe to run the installer again, for example to change your default location. When you run it again, it offers your current settings as the defaults, backs up the previous `reticast.py`, keeps visitors' saved places, and doesn't add a second cron job.
 
 ## Manual install
 
-To do the same steps by hand from the repo folder, as the NomadNet user:
+1. Copy `scripts/reticast.py` to `~/scripts/` and make it executable:
 
-1. Copy the script:
    ```
    mkdir -p ~/scripts
    cp scripts/reticast.py ~/scripts/
    chmod +x ~/scripts/reticast.py
    ```
-2. Edit the settings at the top of `~/scripts/reticast.py`: set `GRIDSQUARE` to your grid square and put your email or callsign in `USER_AGENT`.
-3. Find your full Python path. It must be version 3.9 or newer:
-   ```
-   which python3
-   python3 --version
-   ```
-   NomadNet runs page scripts without your login shell, so put this full path on the first line of each page you install from `pages/`, in the form `#!/usr/bin/python3`.
-4. Install the weather page:
+
+2. Edit the settings at the top of `~/scripts/reticast.py`. At minimum, set `DEFAULT_LOCATION`, and put your email or callsign in `USER_AGENT`. See [Settings](#settings) for the rest.
+
+3. Copy the page into your NomadNet pages folder:
+
    ```
    cp pages/reticast.mu ~/.nomadnetwork/storage/pages/
    chmod +x ~/.nomadnetwork/storage/pages/reticast.mu
    ```
-5. Optional: install the demo home page. Skip this to keep your own home page. If you already have your own `index_header.mu` or `index_body.mu` in `~/scripts`, don't copy those two.
+
+4. Edit the first line of `reticast.mu` so it's the full path to your Python. Run `which python3` to find it, for example `#!/usr/bin/python3`. If `reticast.py` isn't in `~/scripts`, also change the `SCRIPTS_DIR` line.
+
+5. Check your default location, then do a test run:
+
    ```
-   cp scripts/index_header.mu scripts/index_body.mu ~/scripts/
-   cp ~/.nomadnetwork/storage/pages/index.mu ~/scripts/index.mu.backup
-   cp pages/index.mu pages/about.mu ~/.nomadnetwork/storage/pages/
-   chmod +x ~/.nomadnetwork/storage/pages/index.mu
-   ```
-6. Test it. You should see `[debug]` timing lines, then the weather line:
-   ```
+   ~/scripts/reticast.py --check
    ~/scripts/reticast.py --debug
    ```
-7. Add the cron job, using your Python path from step 3. Then confirm it with `crontab -l`:
+
+6. Add the cron job with `crontab -e`, using your own paths:
+
    ```
-   (crontab -l 2>/dev/null; echo "*/5 * * * * /usr/bin/python3 $HOME/scripts/reticast.py > /dev/null 2>&1") | crontab -
+   */5 * * * * /usr/bin/python3 /home/pi/scripts/reticast.py > /dev/null 2>&1
    ```
-8. Restart NomadNet, as described under [Restart NomadNet](#restart-nomadnet).
 
-If you put the script somewhere other than `~/scripts`, also change the `SCRIPTS_DIR` line in `reticast.mu` and the `PARTS_DIR` line in `index.mu` to match.
+7. Restart NomadNet.
 
-## Files
+## Upgrading from RetiCast 1.x
 
-| Path in repo | Installed to | What it is |
-| --- | --- | --- |
-| `scripts/reticast.py` | `~/scripts/` | Fetches the weather, caches it, and formats it |
-| `pages/reticast.mu` | `~/.nomadnetwork/storage/pages/` | The full weather page |
-| `pages/index.mu` | `~/.nomadnetwork/storage/pages/` | Demo home page: header, weather line, body |
-| `scripts/index_header.mu` | `~/scripts/` | Demo site header, shown above the weather line |
-| `scripts/index_body.mu` | `~/scripts/` | Demo menu and content, shown below the weather line |
-| `pages/about.mu` | `~/.nomadnetwork/storage/pages/` | Demo About page |
+Run the 2.0 installer. It reads your 1.x settings (`GRIDSQUARE`, your contact, and units) and offers them as the defaults, so pressing Enter at each question keeps them. The installer also:
 
-`reticast_cache.json` is created next to `reticast.py` on the first run.
+- backs up your 1.x `reticast.py` as `reticast.py.bak.<date>`
+- replaces the page with the 2.0 version
+- removes the 1.x cache file, `reticast_cache.json`
+- replaces the 1.x cron job instead of adding a second one
 
-## How it works
+Things that stay the same:
 
-Cron runs `reticast.py` every 5 minutes. It:
+- **Your home page.** `get_weather_string()`, `get_weather_title()`, and `get_weather_micron()` still exist and still describe your node's default location. A home page that shows the 1.x one-line summary keeps working unchanged.
+- **Links.** The page is still `/page/reticast.mu`.
 
-1. Converts the grid square to the latitude and longitude at its center.
-2. Looks up the county, state, time zone, nearby stations, and forecast area from the NWS API. These never change, so they're saved and looked up only once.
-3. Fetches the latest observation and the active alerts every 10 minutes, and the forecast every 30 minutes, all at the same time.
-4. Saves everything to `reticast_cache.json`.
+Things that change:
 
-When someone opens a page, it builds the output from that saved data, so pages never wait on the weather service.
+- `GRIDSQUARE` is now `DEFAULT_LOCATION`, and it accepts any location, not just a grid square.
+- If you changed other settings in 1.x (such as `MAX_ALERT_CHARS`), they go back to their defaults. Your old copy is in the backup file if you want to reapply them.
+- The page tells clients not to cache it, because it's now personal to each visitor.
 
-## Show the weather on your own pages
+## Using RetiCast
 
-Micron can't run code or include other files, so a page that shows live data has to be a small Python script. The demo home page works this way, printing three parts in order:
+The menu at the top of the page has **Home** and **Search** for everyone, plus **Overview** and **My Places** for identified visitors.
+
+### Searching
+
+Type a place in the search box and select **Search**. Each result shows its name, country, and coordinates. Select a result to see its weather.
+
+- **City and state:** a state narrows US results to that state. The comma is optional (`Paris TX`, `Paris, TX`, and `Paris, Texas` all work).
+- **Other countries:** add the country to narrow the results, for example `Paris, France`.
+- **Towns with the same name:** if two results in the same state would look identical, the county is added so you can tell them apart.
+- **Grid squares and coordinates:** these don't need a lookup, so they work even if the place search service is unavailable.
+
+### Saving places
+
+To save places, a visitor needs to identify to your node in their NomadNet client first. RetiCast remembers their places by their identity, not by name or address, so they appear again on any client that uses the same identity.
+
+On any place's weather page, and next to each search result, identified visitors can:
+
+- **Make it their default.** Their default is what RetiCast opens on (unless they chose the overview). If the new default was a favorite, the two swap places. If it wasn't, the old default moves into their favorites if there's room.
+- **Add it to their favorites,** up to 5.
+
+### My Places
+
+My Places shows a visitor's default and favorites. From there they can:
+
+- view any saved place
+- make a favorite their default
+- remove a favorite
+- stop using a place as their default
+- choose what RetiCast opens on: their default location, or an overview of all their places (used once they have at least 2 saved places)
+
+### Overview
+
+The overview shows each saved place with its current temperature, conditions, humidity and wind, a short look ahead, and the names of any active alerts. Select a place's name for its full weather page.
+
+### Alerts
+
+For US locations, the page lists every active watch, warning, and advisory. Long alerts are trimmed; select **Read full alert** to see the complete alert on its own page, with the affected areas, full instructions, and the issuing NWS office. If an alert expires before someone opens it, the page says it's no longer active.
+
+Weather alerts aren't available for places outside the US.
+
+## Adding the weather to your home page
+
+`get_weather_string()` returns a one-line summary for your node's default location, for example:
 
 ```
-index_header.mu   ->   weather line   ->   index_body.mu
+Current weather conditions for gridsquare EM20fb (Harris County, Texas) @ 8PM 09/26/2026: Temp. 77F, Humidity 74%, Clear
 ```
 
-To use your existing home page with it, split your old `index.mu` into two files in `~/scripts`: everything above where the weather should appear goes in `index_header.mu`, and everything below goes in `index_body.mu`. Later changes to those files show up on the next page load, without editing `index.mu`.
+Active watches and warnings are added to the end of the line when there are any.
 
-To add weather to a page that is already a Python script, add this with no leading spaces:
+To show it on a page, with the word "Weather" linking to the full weather page:
 
 ```python
-import os
-import sys
+#!/usr/bin/python3
+import os, sys
 sys.path.insert(0, os.path.expanduser("~/scripts"))
+from reticast import get_weather_string
 
-try:
-    from reticast import get_weather_string
-    weather = get_weather_string()
-except Exception as e:
-    weather = f"Weather unavailable ({type(e).__name__})"
-print("`F0ff`!`_`[Weather`:/page/reticast.mu]`_`!: " + weather + "`f")
+print("`F0ff`!`_`[Weather`:/page/reticast.mu]`_`!: `Fddd" + get_weather_string() + "`f")
 ```
 
-The word "Weather" links to the full weather page. For the full page content instead of one line, use `get_weather_micron()`. The `try` block makes sure a weather problem can never stop the rest of the page from loading.
+The summary is read from saved data, so it doesn't slow your home page down. The cron job keeps it fresh.
 
-## Match your site's header and menu
+Other functions you can use the same way:
 
-If your pages share a common header and menu, the RetiCast page can show them too. Create `site_parts.py` in your scripts folder (`~/scripts` by default) with a `print_top()` function that prints them:
+- `get_weather_title()` returns a short title, such as `Harris County, Texas (EM20fb)`.
+- `get_weather_micron()` returns the full weather view (alerts, conditions, and forecast) for your default location, as Micron.
 
-```python
-# ~/scripts/site_parts.py
-import os
+### Using your site header
 
-def print_top():
-    for name in ("my_header.mu", "my_menu.mu"):
-        with open(os.path.expanduser("~/scripts/" + name), encoding="utf-8") as f:
-            print(f.read(), end="")
-```
+If `~/scripts/site_parts.py` exists and has a `print_top()` function, RetiCast calls it at the top of every page, so the weather page shows your node's usual banner and menu. If the file isn't there, RetiCast simply starts with its own menu.
 
-The RetiCast page looks for `site_parts.py` every time it loads and, if it's there, prints your header and menu above its own content. Because the hook lives in your own file, it keeps working when you rerun the installer or update RetiCast. If `site_parts.py` doesn't exist, the page shows its own content only.
+## Settings
 
-## Configuration
-
-Settings are at the top of `reticast.py`. The installer sets the first two for you.
+All settings are at the top of `reticast.py`. The installer sets the first three for you.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `GRIDSQUARE` | `"FN31pr"` | Your 4, 6, or 8 character grid square |
-| `USER_AGENT` | `"(RetiCast, you@example.com)"` | Your contact for NWS |
-| `UNITS` | `"us"` | `"us"` (F, mph, inHg, miles) or `"metric"` (C, km/h, hPa, km) |
-| `ALERT_KEYWORDS` | `("Warning", "Watch")` | Alert types in the one-line summary; add `"Advisory"` for more |
-| `PAGE_ALL_ALERTS` | `True` | Show every alert on the weather page, advisories included |
+| `DEFAULT_LOCATION` | `"EM20fb"` | What guests see. Any search works: grid square, `"City, ST"`, ZIP code, or `"lat,lon"` |
+| `USER_AGENT` | `"(RetiCast, you@example.com)"` | Identifies your node to the weather services; put your email or callsign in it |
+| `UNITS` | `"us"` | `"us"` or `"metric"` |
+| `DEFAULT_LOCATION_NAME` | `""` | A display name for the default location (`""` = automatic) |
+| `PAGE_PATH` | `"/page/reticast.mu"` | The page's path on your node; change it if you rename the page |
+| `MAX_FAVORITES` | `5` | Favorites per visitor, not counting their default |
+| `MAX_USERS` | `1000` | Most visitors who can save places on your node |
+| `SEARCH_RESULTS` | `8` | Most results shown for a search |
+| `ALERT_KEYWORDS` | `("Warning", "Watch")` | Alert types included in the one-line summary. Add `"Advisory"` for those too |
 | `MAX_ALERT_CHARS` | `600` | Trim long alerts on the page and add a "Read full alert" link (`0` = never trim) |
-| `PAGE_PATH` | `"/page/reticast.mu"` | Where the weather page is served; change it if you rename the page |
-| `FORECAST_PERIODS` | `14` | Forecast periods on the page (14 = 7 days, day and night) |
-| `CACHE_MINUTES` | `10` | How long current conditions and alerts are reused |
-| `FORECAST_CACHE_MINUTES` | `30` | How long the forecast is reused |
-| `TIMESTAMP_SOURCE` | `"now"` | Time in the one-line summary: `"now"` = fetch time, `"observation"` = station reading time |
-| `TIME_FORMAT` | `"%I%p %m/%d/%Y"` | Time format in the one-line summary; `"%I:%M%p %m/%d/%Y"` shows minutes |
+| `FORECAST_PERIODS` | `14` | NWS forecast periods shown (14 = 7 days, day and night) |
+| `CACHE_MINUTES` | `10` | How long current conditions and alerts are reused before asking again |
+| `FORECAST_CACHE_MINUTES` | `30` | How long a forecast is reused |
+| `RETRY_MINUTES` | `2` | After a failed update, how long to wait before trying again |
+| `PREFETCH_LIMIT` | `50` | Most places the cron job refreshes per run |
+| `PRUNE_DAYS` | `7` | Saved data for places nobody has saved is deleted after this many days |
+| `TIMESTAMP_SOURCE` | `"now"` | Time shown in the one-line summary: `"now"` (when fetched) or `"observation"` (when the station took its reading) |
+| `TIME_FORMAT` | `"%I%p %m/%d/%Y"` | Time format in the one-line summary |
+| `MAX_STATIONS` | `3` | Nearby NWS stations to try if the closest has no current reading |
+| `HTTP_TIMEOUT` | `8` | Seconds to wait for each web request |
 
-If you change the cron interval to longer than 10 minutes, raise `CACHE_MINUTES` to a little more than the new interval.
+After changing `DEFAULT_LOCATION`, run `~/scripts/reticast.py --check` to confirm what it resolves to.
+
+## Commands
+
+```
+~/scripts/reticast.py              refresh saved places and print the one-line summary (what cron runs)
+~/scripts/reticast.py --check      look up DEFAULT_LOCATION and show what it resolved to
+~/scripts/reticast.py --search Q   test a search, e.g. --search "Austin TX"
+~/scripts/reticast.py --page       print the full weather view for the default location
+~/scripts/reticast.py --debug      add web request timings (works with the other commands)
+```
+
+## How it works
+
+- **Weather:** US places (including Puerto Rico, Guam, and the other US territories) use the National Weather Service. For those, RetiCast looks up the county and the nearest stations once and saves them, then fetches current conditions, alerts, and the forecast. Everywhere else uses Open-Meteo.
+- **Search:** US ZIP codes use Zippopotam.us. Place names use Open-Meteo's geocoding. Grid squares and coordinates are worked out locally. Searches are saved for 7 days.
+- **Saved data:** current conditions and alerts are reused for 10 minutes, and forecasts for 30. Visiting a place nobody has looked at recently fetches it on the spot, which takes a few seconds.
+- **Cron:** every 5 minutes, the cron job refreshes the node's default location and visitors' saved places, then cleans out old data. Only data that's out of date is fetched again.
+- **Pages:** each visit runs `reticast.mu`, which builds the page for that visitor. NomadNet tells RetiCast who the visitor is when they've identified.
+
+### Files
+
+Everything RetiCast saves is in `~/scripts/reticast_data/`, which is private to the NomadNet user:
+
+| File | What it holds |
+| --- | --- |
+| `users.json` | Each identified visitor's saved places and landing page choice |
+| `server_default.json` | Your default location as it was looked up |
+| `cache/` | Saved weather, location details, and search results |
+
+You can delete `cache/` at any time; it's rebuilt as needed. Deleting `users.json` erases all visitors' saved places.
+
+## Privacy
+
+For visitors who save places, RetiCast stores their identity hash (the same public identifier NomadNet uses for them), their saved places, and their landing page choice. That's all. Nothing is stored for visitors who only look at the weather.
+
+Place searches go to Open-Meteo or Zippopotam.us, and weather requests go to the National Weather Service or Open-Meteo. These requests come from your node, not the visitor, and don't include anything about the visitor.
 
 ## Troubleshooting
 
-Run a page by hand, the same way NomadNet does. Errors print here but not in the client:
+**The page shows "Weather data isn't available for this place right now."**
+The weather service didn't answer. RetiCast tries again after `RETRY_MINUTES`. Run `~/scripts/reticast.py --debug` to see each request and how it went.
 
-```
-~/.nomadnetwork/storage/pages/reticast.mu
-```
+**"This node's default location couldn't be looked up right now."**
+Run `~/scripts/reticast.py --check`. If the lookup fails, check the spelling of `DEFAULT_LOCATION` (adding a state or country helps), or use a grid square or coordinates, which don't need a lookup.
 
-To check the data fetch itself, run `~/scripts/reticast.py --debug`. It prints a `[debug]` line with the time each API call took. If you see no `[debug]` lines, the data came from the cache; delete `~/scripts/reticast_cache.json` and run it again.
+**The page shows "saved data - the weather service didn't answer."**
+RetiCast is showing the last good data because an update failed. This usually clears up on its own. If it doesn't, check that the cron job is running with `crontab -l`, and that the node can reach the internet.
 
-| Symptom | Fix |
-| --- | --- |
-| Client says "No content available" | Run the page by hand (above) to see the error |
-| New page doesn't show up, or the old home page still appears | Restart NomadNet (see [Restart NomadNet](#restart-nomadnet)) |
-| Page shows the script's code | Make it executable, for example `chmod +x ~/.nomadnetwork/storage/pages/reticast.mu` |
-| Page fails after editing on another computer | The file may have Windows line endings; fix with `sed -i 's/\r$//' <file>` |
-| Page shows "Weather unavailable" | Check that `~/scripts/reticast.py` exists, and that the page's first line is your Python path (`which python3`) |
-| `WARNING: cannot write cache file` | Make `~/scripts` writable by the NomadNet user |
-| "(cached - update failed)" appears | The weather service was unreachable; it clears on the next good update |
-| Weather never updates | Check `crontab -l` for the RetiCast job |
+**Visitors can't save places.**
+They need to identify to your node in their client first. The page says "You're browsing as a guest" until they do.
 
-## Uninstall
+**A search finds nothing.**
+Try adding a state or country (`Springfield, IL`), or use a ZIP code, grid square, or coordinates.
 
-```
-crontab -l | grep -v reticast.py | crontab -
-rm ~/.nomadnetwork/storage/pages/reticast.mu
-rm ~/scripts/reticast.py ~/scripts/reticast_cache.json
-```
+**The page doesn't load at all.**
+Check that the first line of `reticast.mu` is the full path to Python, that both `reticast.mu` and `reticast.py` are executable, and that the `SCRIPTS_DIR` line in `reticast.mu` points at the folder containing `reticast.py`. Running the page directly, for example `~/.nomadnetwork/storage/pages/reticast.mu`, shows any error.
 
-If you installed the demo home page, restore your original:
+## Data sources and fair use
 
-```
-cp ~/scripts/index.mu.backup.<date> ~/.nomadnetwork/storage/pages/index.mu
-```
+- [National Weather Service API](https://www.weather.gov/documentation/services-web-api): US weather and alerts
+- [Open-Meteo](https://open-meteo.com): weather outside the US, and place search. Free for non-commercial use.
+- [Zippopotam.us](https://zippopotam.us): US ZIP codes
 
-Then remove any links to `/page/reticast.mu` from your other pages, and restart NomadNet.
+Please keep your contact in `USER_AGENT` so the services can reach you if there's a problem, and keep the cache settings at or above their defaults.
 
-## Credits
+## License
 
-Weather data comes from the [National Weather Service API](https://www.weather.gov/documentation/services-web-api). RetiCast is not affiliated with or endorsed by the National Weather Service.
+RetiCast is released into the public domain under the [Unlicense](LICENSE).
 
-## See also
-
-[RetiSkip](<RetiSkip repo URL>): HF band conditions and solar data as a ready-to-install NomadNet page.
+This software is possible because my parents believed in me and encouraged me to follow my passions.
