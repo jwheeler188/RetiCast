@@ -163,7 +163,7 @@ if [ ! -d "$PAGES_DIR" ]; then
 fi
 
 # --- current settings (when upgrading) -----------------------------------
-OLD_LOCATION=""; OLD_CONTACT=""; OLD_UNITS=""; OLD_PROP=""; OLD_DNAME=""
+OLD_LOCATION=""; OLD_CONTACT=""; OLD_UNITS=""; OLD_PROP=""; OLD_DNAME=""; OLD_NODE=""
 if [ -f "$SCRIPTS_DIR/reticast.py" ] || [ -f "$SCRIPTS_DIR/reticast_notify.py" ]; then
     {
         IFS= read -r OLD_LOCATION || true
@@ -171,6 +171,7 @@ if [ -f "$SCRIPTS_DIR/reticast.py" ] || [ -f "$SCRIPTS_DIR/reticast_notify.py" ]
         IFS= read -r OLD_UNITS || true
         IFS= read -r OLD_PROP || true
         IFS= read -r OLD_DNAME || true
+        IFS= read -r OLD_NODE || true
     } < <("$PYTHON" - "$SCRIPTS_DIR/reticast.py" "$SCRIPTS_DIR/reticast_notify.py" <<'PY'
 import json, re, sys
 def read(path):
@@ -195,7 +196,8 @@ if contact == "you@example.com":
 units = find(r'^UNITS = "(.*?)"', main)
 prop = find(r'^PROPAGATION_NODE = "([0-9a-fA-F]{32})"', notify).lower()
 dname = literal("DISPLAY_NAME", notify)
-for v in (loc, contact, units, prop, dname):
+node = find(r'^NODE_ADDRESS = "([0-9a-fA-F]{32})"', notify).lower()
+for v in (loc, contact, units, prop, dname, node):
     print(v)
 PY
 )
@@ -285,6 +287,13 @@ case "$UNITS" in US) UNITS="us" ;; METRIC) UNITS="metric" ;; esac
 PROPAGATION_NODE="$(clean_prop "$PROPAGATION_NODE")"
 valid_prop "$PROPAGATION_NODE" || die "--propagation-node must be a 32-character LXMF address or none (got \"$PROPAGATION_NODE\")."
 [ "$PROPAGATION_NODE" = "none" ] && PROPAGATION_NODE=""
+NODE_ADDRESS="$OLD_NODE"
+if [ -n "$NODE_ADDRESS" ] && [ "$NODE_ADDRESS" = "$PROPAGATION_NODE" ]; then
+    warn "NODE_ADDRESS in the old reticast_notify.py was your propagation node's address,"
+    warn "which would put the wrong link in messages. Clearing it, so the node's address is"
+    warn "read from NomadNet's identity instead."
+    NODE_ADDRESS=""
+fi
 DNAME="$(printf '%s' "$DNAME" | tr -d '"\\' | tr -d '\000-\037' | tr -s ' ' | cut -c1-64)"
 [ -n "$DNAME" ] || DNAME="RetiCast Alerts"
 
@@ -446,12 +455,12 @@ if [ -f "$SCRIPTS_DIR/reticast_notify.py" ]; then
     cp "$SCRIPTS_DIR/reticast_notify.py" "$SCRIPTS_DIR/reticast_notify.py.bak.$STAMP"
 fi
 cp "$SRC/scripts/reticast_notify.py" "$SCRIPTS_DIR/reticast_notify.py.new"
-"$PYTHON" - "$SCRIPTS_DIR/reticast_notify.py.new" "$NOTIFY_PYTHON" "$PROPAGATION_NODE" "$DNAME" <<'PY'
+"$PYTHON" - "$SCRIPTS_DIR/reticast_notify.py.new" "$NOTIFY_PYTHON" "$PROPAGATION_NODE" "$DNAME" "$NODE_ADDRESS" <<'PY'
 import json, re, sys
-path, python, prop, dname = sys.argv[1:]
+path, python, prop, dname, node = sys.argv[1:]
 s = open(path, encoding="utf-8").read()
 s = re.sub(r"^#!.*", lambda m: "#!" + python, s, count=1)
-for name, value in (("PROPAGATION_NODE", prop), ("DISPLAY_NAME", dname)):
+for name, value in (("PROPAGATION_NODE", prop), ("DISPLAY_NAME", dname), ("NODE_ADDRESS", node)):
     s, n = re.subn(rf"^{name} = .*?(\s+#.*)?$",
                    lambda m: f"{name} = {json.dumps(value, ensure_ascii=False)}" + (m.group(1) or ""),
                    s, count=1, flags=re.M)

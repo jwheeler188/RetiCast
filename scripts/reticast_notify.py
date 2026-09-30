@@ -440,16 +440,25 @@ class Messenger:
 # ============================== service ================================
 
 def node_address():
-    if NODE_ADDRESS:
-        return NODE_ADDRESS.lower() if rc.HASH_RE.match(NODE_ADDRESS.lower()) else ""
+    """(address, where it came from) of the NomadNet node, for links in messages."""
+    given = NODE_ADDRESS.strip().lower()
+    if given:
+        if not rc.HASH_RE.match(given):
+            log(f"NODE_ADDRESS {NODE_ADDRESS!r} isn't a valid address; ignoring it")
+        elif given == PROPAGATION_NODE.strip().lower():
+            log("NODE_ADDRESS is the same as PROPAGATION_NODE, which is almost certainly a "
+                "mix-up; ignoring NODE_ADDRESS")
+        else:
+            return given, "NODE_ADDRESS"
     path = os.path.expanduser(NOMADNET_IDENTITY)
     if not os.path.isfile(path):
-        return ""
+        return "", f"no NomadNet identity at {path}"
     try:
         ident = RNS.Identity.from_file(path)
-        return RNS.Destination.hash_from_name_and_identity("nomadnetwork.node", ident.hash).hex()
+        return (RNS.Destination.hash_from_name_and_identity("nomadnetwork.node", ident.hash).hex(),
+                "NomadNet's identity")
     except Exception:
-        return ""
+        return "", f"couldn't read {path}"
 
 
 def self_check(identity):
@@ -538,9 +547,9 @@ def main(argv):
 
     messenger = Messenger()
     self_check(messenger.identity)
-    node_addr = node_address()
+    node_addr, source = node_address()
     messenger.node_addr = node_addr
-    log(f"RetiCast alert messages {rc.VERSION} running. Node link: {node_addr or '(none)'}")
+    log(f"RetiCast alert messages {rc.VERSION} running. Node link: {node_addr or '(none)'} ({source})")
     last_check = last_beat = last_watch = 0.0
     last_announce = time.time()
     while True:

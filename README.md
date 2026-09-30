@@ -454,6 +454,9 @@ RetiCast is showing the last good data because an update failed. This usually cl
 **The alert service fails with an import error under systemd, but runs fine by hand.**
 systemd is starting it with a Python that can't import `rns` and `lxmf`. Check the first line of `~/scripts/reticast_notify.py` and the `ExecStart=` line of the service file: both should use the Python that NomadNet runs with. Running the installer again with `--python /path/to/that/python3` sets it.
 
+**The link in alert messages points to the wrong node.**
+The link uses your node's address, read from NomadNet's identity when the alert service starts. `journalctl -u reticast-notify | grep "Node link"` shows the address and where it came from. If it came from `NODE_ADDRESS`, check that setting at the top of `reticast_notify.py`: it's easy to paste the propagation node's address there by mistake. Leave it as `""` unless your NomadNet identity is somewhere unusual, then restart the service.
+
 **The alert service fails to start after a reboot.**
 It probably started before Reticulum was ready. Run the installer again: it looks for a readiness gate and updates the service file to wait for it (then follow the commands it shows). If you don't have a gate yet, [reticulum-readygate](https://github.com/jwheeler188/reticulum-readygate) adds one.
 
