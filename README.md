@@ -1,8 +1,8 @@
-# RetiCast 2.0
+# RetiCast 2.1
 
 Live weather for your NomadNet node, for any place in the world.
 
-Visitors can look up the weather anywhere by city, city and state, US ZIP code, grid square, or latitude/longitude. Visitors who identify to your node can save a default location and up to 5 favorites. They can also choose whether RetiCast opens on their default location or on an overview of all their saved places. Everyone else sees the default location you choose for your node.
+Visitors can look up the weather anywhere by city, city and state, US ZIP code, grid square, or latitude/longitude. Visitors who identify to your node can save a default location and up to 5 favorites. They can also choose whether RetiCast opens on their default location or on an overview of all their saved places, and can get an LXMF message whenever the National Weather Service issues an alert for their default location. Everyone else sees the default location you choose for your node.
 
 US locations get active watches, warnings, and advisories, current conditions, and a 7-day forecast from the National Weather Service. Places outside the US get current conditions and a 7-day forecast from Open-Meteo. No API keys are needed, and RetiCast uses only the Python standard library.
 
@@ -24,7 +24,9 @@ My Places, where visitors manage their default location and favorites, and choos
 
 ![My Places](docs/screenshots/my-places.png)
 
-The screenshots are from the W5PL Piticulum node. The banner and menu at the top come from that node's own site header, which RetiCast shows automatically (see [Using your site header](#using-your-site-header)).
+These screenshots are from the W5PL Piticulum node. The banner and menu at the top come from that node's own site header, which RetiCast shows automatically (see [Using your site header](#using-your-site-header)).
+
+The storm, alert and alert message screenshots further down come from a test run on a simulated Reticulum network ([Reticulated](https://github.com/RFnexus/reticulated)), using real Reticulum, LXMF and NomadNet with made-up test alerts. They were drawn with NomadNet's own page renderer, so they have no site header.
 
 ## Features
 
@@ -36,6 +38,7 @@ The screenshots are from the W5PL Piticulum node. The banner and menu at the top
 - **Current conditions:** temperature, feels like, humidity, dew point, wind and gusts, pressure, visibility, and the reporting station.
 - **7-day forecast:** day and night periods for US locations, and daily highs and lows elsewhere.
 - **Fast pages:** a cron job keeps the node's default and visitors' saved places up to date, so those pages load from saved data. If a weather service stops answering, RetiCast shows the last saved data and says so.
+- **Alert messages (optional, US):** visitors can turn on LXMF messages for alerts at their default location, choose which kinds they get, and turn them off by replying STOP. See [Alert messages](#alert-messages).
 - **One-line summary:** a function you can use to put the current weather on your home page or any other page.
 - **US or metric units.**
 
@@ -45,6 +48,7 @@ The screenshots are from the W5PL Piticulum node. The banner and menu at the top
 - Python 3.9 or newer (Raspberry Pi OS and current Linux distributions already have it)
 - Internet access from the node, for the weather services
 - `cron`, to keep the saved data fresh
+- For the optional alert messages: the `rns` and `lxmf` Python packages (installed with NomadNet), and `systemd` or another way to run a background service
 
 ## Install options
 
@@ -87,6 +91,7 @@ Set any of these before `./install.sh` to change how it runs:
 | `GRID` | | Same as `LOCATION`; still accepted from RetiCast 1.x |
 | `CONTACT` | asks | Your email or callsign; skips the question |
 | `UNITS` | `us` | `us` (F, mph, inHg, miles) or `metric` (C, km/h, hPa, km) |
+| `PROPAGATION_NODE` | none | LXMF propagation node for alert messages to people who are offline |
 | `SCRIPTS_DIR` | `~/scripts` | Where `reticast.py` and its data go |
 | `PAGES_DIR` | `~/.nomadnetwork/storage/pages` | Your NomadNet pages folder |
 | `PYTHON` | output of `which python3` | The Python to use (3.9 or newer) |
@@ -134,6 +139,8 @@ It's safe to run the installer again, for example to change your default locatio
    ```
 
 7. Restart NomadNet.
+
+8. Optional, for alert messages: copy `scripts/reticast_notify.py` to `~/scripts/`, make it executable, set its first line to your Python, and set up the service as described in [Alert messages](#alert-messages).
 
 ## Upgrading from RetiCast 1.x
 
@@ -195,7 +202,90 @@ The overview shows each saved place with its current temperature, conditions, hu
 
 For US locations, the page lists every active watch, warning, and advisory. Long alerts are trimmed; select **Read full alert** to see the complete alert on its own page, with the affected areas, full instructions, and the issuing NWS office. If an alert expires before someone opens it, the page says it's no longer active.
 
+A page during a storm, with a trimmed tornado warning and a watch:
+
+![Weather page with a tornado warning and a severe thunderstorm watch](docs/screenshots/storm-alerts.png)
+
+The same tornado warning after selecting **Read full alert**:
+
+![The full alert view](docs/screenshots/full-alert.png)
+
 Weather alerts aren't available for places outside the US.
+
+## Alert messages
+
+RetiCast can send visitors an LXMF message whenever the National Weather Service issues an alert for their default location. This part is optional: it's a separate background service, `reticast_notify.py`, and the weather page works the same without it.
+
+### How visitors use it
+
+In **My Places**, visitors with a US default location see an **Alert messages** section, where they can:
+
+- turn messages on or off
+- choose what they get: warnings only, warnings and watches (the default), warnings, watches and advisories, or everything including statements
+- limit messages to Severe and Extreme alerts
+- send themselves a test message
+- send messages to a different LXMF address
+
+They can also turn messages off by replying **STOP** to any alert message.
+
+![The Alert messages section of My Places](docs/screenshots/alert-messages-settings.png)
+
+Each alert is sent once. Updates to an alert someone already got (such as an extended warning) aren't sent again, but an upgrade, such as a watch becoming a warning, is. Each message has the alert, when it ends, its headline, a short description, what to do, and a link to the full alert on your node. Messages are kept short for slow LoRa links.
+
+A tornado warning as it arrived in a visitor's messaging app:
+
+![A tornado warning alert message](docs/screenshots/alert-message.png)
+
+### Where messages go
+
+Visitors don't need to type in an LXMF address. When someone identifies to your node, NomadNet tells RetiCast their identity, and their LXMF address is worked out from it. That's the same identity their messaging app uses in most setups.
+
+Some people use one identity for browsing and another for messaging. If their test message doesn't arrive, they can enter their messaging app's LXMF address instead. RetiCast then sends a 6-digit code to that address, and they enter it on the page to confirm it's theirs. Without that step, anyone could send alerts to someone else's address.
+
+### Setting it up
+
+1. The service needs the `rns` and `lxmf` Python packages. If NomadNet runs on the same machine, you already have them.
+2. Run the installer. It installs `reticast_notify.py` and writes a ready-to-use service file, `~/scripts/reticast-notify.service`, with your user name and paths filled in.
+3. Install and start the service (this is the one step that needs `sudo`):
+
+   ```
+   sudo cp ~/scripts/reticast-notify.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now reticast-notify
+   ```
+
+4. Check that it started with `journalctl -u reticast-notify -n 20`. Within a minute, the Alert messages section appears in My Places.
+
+The service connects to Reticulum like any other program on the machine. If you run `rnsd` or NomadNet as a shared instance, it uses that. If your Reticulum stack has its own startup ordering, add `reticast-notify.service` to it like your other services that need Reticulum.
+
+### Reaching people who are offline
+
+Without a propagation node, messages can only reach people whose device is online at the time. To reach everyone, set `PROPAGATION_NODE` to an LXMF propagation node, ideally one that's always on, or on the same machine:
+
+```
+PROPAGATION_NODE=<address> ./install.sh
+```
+
+Then restart the service with `sudo systemctl restart reticast-notify`. The installer remembers the setting when you run it again.
+
+Messages are tried directly first, then through the propagation node. If someone's address hasn't been heard on the network yet, their message waits (up to 6 hours) while the service asks the network for it.
+
+### Notifier settings
+
+These are at the top of `reticast_notify.py`:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `PROPAGATION_NODE` | `""` | LXMF propagation node for people who are offline (`""` = direct delivery only) |
+| `DISPLAY_NAME` | `"RetiCast Alerts"` | The name people see on the messages |
+| `NODE_ADDRESS` | `""` | Your node's address for the link in messages (`""` = read from NomadNet's identity) |
+| `CHECK_MINUTES` | `3` | How often to check for new alerts |
+| `ANNOUNCE_HOURS` | `6` | How often the service announces itself on the network |
+| `MAX_WAIT_HOURS` | `6` | How long to keep trying to reach an address nobody has heard from |
+| `MAX_PER_CHECK` | `5` | Most new alerts sent to one person per check; the rest follow on the next check |
+| `MAX_DESCRIPTION_CHARS` | `300` | How much of the alert description goes in a message |
+
+`TEST_COOLDOWN_MINUTES` in `reticast.py` (default `10`) limits how often each visitor can send a test or confirmation message.
 
 ## Adding the weather to your home page
 
@@ -266,6 +356,7 @@ After changing `DEFAULT_LOCATION`, run `~/scripts/reticast.py --check` to confir
 ~/scripts/reticast.py --search Q   test a search, e.g. --search "Austin TX"
 ~/scripts/reticast.py --page       print the full weather view for the default location
 ~/scripts/reticast.py --debug      add web request timings (works with the other commands)
+~/scripts/reticast_notify.py --address   show the address alert messages come from
 ```
 
 ## How it works
@@ -285,12 +376,13 @@ Everything RetiCast saves is in `~/scripts/reticast_data/`, which is private to 
 | `users.json` | Each identified visitor's saved places and landing page choice |
 | `server_default.json` | Your default location as it was looked up |
 | `cache/` | Saved weather, location details, and search results |
+| `notify/` | The alert message service's identity, which alerts each person has been sent, and messages waiting to be delivered |
 
 You can delete `cache/` at any time; it's rebuilt as needed. Deleting `users.json` erases all visitors' saved places.
 
 ## Privacy
 
-For visitors who save places, RetiCast stores their identity hash (the same public identifier NomadNet uses for them), their saved places, and their landing page choice. That's all. Nothing is stored for visitors who only look at the weather.
+For visitors who save places, RetiCast stores their identity hash (the same public identifier NomadNet uses for them), their saved places, and their landing page choice. For visitors who use alert messages, it also stores their alert choices, any LXMF address they entered, and which alerts they've been sent. That's all. Nothing is stored for visitors who only look at the weather.
 
 Place searches go to Open-Meteo or Zippopotam.us, and weather requests go to the National Weather Service or Open-Meteo. These requests come from your node, not the visitor, and don't include anything about the visitor.
 
@@ -307,6 +399,12 @@ RetiCast is showing the last good data because an update failed. This usually cl
 
 **Visitors can't save places.**
 They need to identify to your node in their client first. The page says "You're browsing as a guest" until they do.
+
+**The Alert messages section doesn't appear in My Places.**
+It only appears while the service is running, and only for identified visitors. Check the service with `systemctl status reticast-notify`. The section also explains when a visitor has no default location, or a default outside the US.
+
+**A test message doesn't arrive.**
+The visitor's messaging app may use a different identity than the one they browse with; they can enter the app's LXMF address in My Places. It can also take a few minutes if their address hasn't been heard on the network recently. `journalctl -u reticast-notify` shows each message as it's sent.
 
 **A search finds nothing.**
 Try adding a state or country (`Springfield, IL`), or use a ZIP code, grid square, or coordinates.

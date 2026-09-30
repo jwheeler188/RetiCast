@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1
+
+- Alert messages: visitors can get an LXMF message when the National Weather Service issues an alert for their default location. They choose warnings only, warnings and watches, warnings/watches/advisories, or everything, and can limit it to Severe and Extreme alerts.
+- Messages go to the visitor's own LXMF address, worked out from the identity they browse with, or to another address they confirm with a code.
+- Replying STOP turns messages off.
+- New optional service, `reticast_notify.py`, with a ready-made systemd service file from the installer.
+- The installer accepts `PROPAGATION_NODE` and keeps it when upgrading.
+
 ## 2.0
 
 - Visitors can look up the weather for any place: city, city and state, US ZIP code (including ZIP+4), grid square, or latitude/longitude.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh - install or upgrade RetiCast 2.0 on a NomadNet node.
+# install.sh - install or upgrade RetiCast 2.1 on a NomadNet node.
 #
 # Run as the same user that runs NomadNet (no sudo):   ./install.sh
 #
@@ -11,6 +11,7 @@
 #   GRID         same as LOCATION (kept for RetiCast 1.x installs)
 #   CONTACT      email or callsign sent to the weather services
 #   UNITS        "us" or "metric"
+#   PROPAGATION_NODE  LXMF propagation node for alert messages to offline people
 #   SCRIPTS_DIR  default ~/scripts
 #   PAGES_DIR    default ~/.nomadnetwork/storage/pages
 #   PYTHON       default: output of "which python3"
@@ -32,14 +33,14 @@ warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 # --- checks -----------------------------------------------------------
-[ -f "$SRC/scripts/reticast.py" ] && [ -f "$SRC/pages/reticast.mu" ] \
+[ -f "$SRC/scripts/reticast.py" ] && [ -f "$SRC/scripts/reticast_notify.py" ] && [ -f "$SRC/pages/reticast.mu" ] \
     || die "Run this from the RetiCast folder (scripts/reticast.py and pages/reticast.mu are missing)."
 [ -n "$PYTHON" ] && [ -x "$PYTHON" ] || die "python3 not found. Install Python 3.9+ or set PYTHON=/full/path/to/python3"
 "$PYTHON" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' \
     || die "$PYTHON is older than 3.9 ($("$PYTHON" --version 2>&1))."
 [ -d "$PAGES_DIR" ] || die "NomadNet pages folder not found at $PAGES_DIR. Set PAGES_DIR=/path/to/pages"
 
-say "RetiCast 2.0 installer"
+say "RetiCast 2.1 installer"
 say "Python:         $PYTHON ($("$PYTHON" --version 2>&1))"
 say "Scripts folder: $SCRIPTS_DIR"
 say "Pages folder:   $PAGES_DIR"
@@ -72,6 +73,20 @@ PY
     [ -n "$OLD_LOCATION$OLD_CONTACT" ] && say "Found an existing RetiCast install; its settings are offered as defaults."
 fi
 
+OLD_PROP=""
+if [ -f "$SCRIPTS_DIR/reticast_notify.py" ]; then
+    OLD_PROP="$("$PYTHON" - "$SCRIPTS_DIR/reticast_notify.py" <<'PY'
+import re, sys
+try:
+    s = open(sys.argv[1], encoding="utf-8").read()
+except OSError:
+    s = ""
+m = re.search(r'^PROPAGATION_NODE = "([0-9a-fA-F]{32})"', s, re.M)
+print(m.group(1).lower() if m else "")
+PY
+)"
+fi
+
 # --- settings ---------------------------------------------------------
 LOCATION="${LOCATION:-${GRID:-}}"
 if [ -z "$LOCATION" ]; then
@@ -96,6 +111,12 @@ while [ -z "$CONTACT" ]; do
         read -rp "Email or callsign sent to the weather services (required): " CONTACT
     fi
 done
+
+PROPAGATION_NODE="${PROPAGATION_NODE:-$OLD_PROP}"
+PROPAGATION_NODE="$(printf '%s' "$PROPAGATION_NODE" | tr 'A-F' 'a-f' | tr -d '<> ')"
+if [ -n "$PROPAGATION_NODE" ] && ! [[ "$PROPAGATION_NODE" =~ ^[0-9a-f]{32}$ ]]; then
+    die "PROPAGATION_NODE must be a 32-character LXMF address (got \"$PROPAGATION_NODE\")."
+fi
 
 UNITS="${UNITS:-${OLD_UNITS:-us}}"
 case "$UNITS" in
@@ -133,6 +154,24 @@ PY
 chmod +x "$SCRIPTS_DIR/reticast.py.new"
 mv "$SCRIPTS_DIR/reticast.py.new" "$SCRIPTS_DIR/reticast.py"
 say "Installed $SCRIPTS_DIR/reticast.py"
+
+if [ -f "$SCRIPTS_DIR/reticast_notify.py" ]; then
+    cp "$SCRIPTS_DIR/reticast_notify.py" "$SCRIPTS_DIR/reticast_notify.py.bak.$STAMP"
+fi
+cp "$SRC/scripts/reticast_notify.py" "$SCRIPTS_DIR/reticast_notify.py.new"
+"$PYTHON" - "$SCRIPTS_DIR/reticast_notify.py.new" "$PYTHON" "$PROPAGATION_NODE" <<'PY'
+import re, sys
+path, python, prop = sys.argv[1:]
+s = open(path, encoding="utf-8").read()
+s = re.sub(r"^#!.*", lambda m: "#!" + python, s, count=1)
+s, n = re.subn(r'^PROPAGATION_NODE = ".*?"', lambda m: f'PROPAGATION_NODE = "{prop}"', s, count=1, flags=re.M)
+if n != 1:
+    sys.exit("could not set PROPAGATION_NODE")
+open(path, "w", encoding="utf-8").write(s)
+PY
+chmod +x "$SCRIPTS_DIR/reticast_notify.py.new"
+mv "$SCRIPTS_DIR/reticast_notify.py.new" "$SCRIPTS_DIR/reticast_notify.py"
+say "Installed $SCRIPTS_DIR/reticast_notify.py"
 
 # RetiCast 1.x cache (2.0 keeps its data in reticast_data/)
 if [ -f "$SCRIPTS_DIR/reticast_cache.json" ]; then
@@ -183,6 +222,43 @@ else
     # replace any older RetiCast / NomadWeather job instead of adding a second one
     { crontab -l 2>/dev/null | grep -Fv "reticast.py" | grep -Fv "nomadweather.py" || true; echo "$JOB"; } | crontab -
     say "Cron job installed (every 5 minutes)."
+fi
+
+# --- alert messages service (optional) ----------------------------------
+say ""
+SERVICE="$SCRIPTS_DIR/reticast-notify.service"
+cat > "$SERVICE" <<UNIT
+[Unit]
+Description=RetiCast weather alert messages (LXMF)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$(id -un)
+ExecStart=$PYTHON $SCRIPTS_DIR/reticast_notify.py
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+if "$PYTHON" -c 'import RNS, LXMF' >/dev/null 2>&1; then
+    say "Alert messages (optional): a service file is ready at $SERVICE"
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet reticast-notify 2>/dev/null; then
+        say "The alert message service is running; restart it to use the new version:"
+        say "    sudo systemctl restart reticast-notify"
+    else
+        say "To turn on alert messages, run:"
+        say "    sudo cp $SERVICE /etc/systemd/system/"
+        say "    sudo systemctl daemon-reload"
+        say "    sudo systemctl enable --now reticast-notify"
+    fi
+    [ -z "$PROPAGATION_NODE" ] && say "Tip: set PROPAGATION_NODE so people who are offline still get alerts (see README)."
+else
+    say "Alert messages need the rns and lxmf Python packages, which weren't found for $PYTHON."
+    say "The weather page works without them."
 fi
 
 say ""
