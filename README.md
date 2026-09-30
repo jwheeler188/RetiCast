@@ -8,13 +8,9 @@ US locations get active watches, warnings, and advisories, current conditions, a
 
 ## Screenshots
 
-The weather page for a visitor's default location, with an active alert and the "Read full alert" link:
+The weather page for a visitor's default location, with current conditions and the 7-day forecast:
 
-![Weather page with an active alert](docs/screenshots/weather-view.png)
-
-Further down the same page, current conditions and the 7-day forecast:
-
-![Current conditions and forecast](docs/screenshots/weather-forecast.png)
+![Weather page for a default location](docs/screenshots/weather-view.png)
 
 The overview, which shows a short summary for each saved place:
 
@@ -24,7 +20,7 @@ My Places, where visitors manage their default location and favorites, and choos
 
 ![My Places](docs/screenshots/my-places.png)
 
-These screenshots are from the W5PL Piticulum node. The banner and menu at the top come from that node's own site header, which RetiCast shows automatically (see [Using your site header](#using-your-site-header)).
+These screenshots, and the installer screenshot under [Quick install](#quick-install), are from the W5PL Piticulum node. The banner and menu at the top come from that node's own site header, which RetiCast shows automatically (see [Using your site header](#using-your-site-header)).
 
 The storm, alert and alert message screenshots further down come from a test run on a simulated Reticulum network ([Reticulated](https://github.com/RFnexus/reticulated)), using real Reticulum, LXMF and NomadNet with made-up test alerts. They were drawn with NomadNet's own page renderer, so they have no site header.
 
@@ -67,42 +63,79 @@ cd reticast
 ./install.sh
 ```
 
-The installer asks for two things:
+The installer walks you through five settings, one at a time. Each one is explained, and you can press Enter to accept the value shown in brackets:
 
-1. **The default location**, which is what visitors see before they save their own. Any search RetiCast accepts works, for example `EM20fb`, `Houston, TX`, `77002`, or `29.76,-95.37`.
-2. **An email address or callsign.** The National Weather Service asks every app to identify itself with a way to reach its operator. It's sent to the weather services only, and isn't shown to visitors.
+1. **Default location:** what visitors see before they save their own. Any search RetiCast accepts works, for example `EM20fb`, `Houston, TX`, `77002`, or `29.76,-95.37`.
+2. **Contact:** an email address or callsign. The National Weather Service asks every app to identify itself with a way to reach its operator. It's sent to the weather services only, and isn't shown to visitors.
+3. **Units:** `us` (F, mph, inHg, miles) or `metric` (C, km/h, hPa, km).
+4. **Alert messages display name:** the name people see on alert messages, such as `W5PL - RetiCast Alerts`.
+5. **Alert messages propagation node:** an LXMF propagation node, so alerts reach people who are offline when they're issued, or `none`. See [Reaching people who are offline](#reaching-people-who-are-offline).
 
-The installer then:
+It then shows all the settings together and asks whether to go ahead. Here is an upgrade on the W5PL Piticulum node, keeping most settings and adding a propagation node:
 
-- installs `reticast.py` in `~/scripts` and the page in your NomadNet pages folder
+![The installer walking through the settings on an upgrade](docs/screenshots/installer.png)
+
+After you confirm, it:
+
+- installs `reticast.py` and `reticast_notify.py` in `~/scripts`, and the page in your NomadNet pages folder
 - looks up your default location and shows what it found
 - does a test run
 - adds a cron job that refreshes the weather every 5 minutes
+- writes a ready-to-use service file for alert messages
 
 If this is a new install, restart NomadNet so it sees the new page. Then open `/page/reticast.mu` on your node.
 
 ### Installer options
 
-Set any of these before `./install.sh` to change how it runs:
+You can also give settings on the command line. When you do, the installer skips the walkthrough, shows every setting it will use (and where each came from: your option, your current setting, or the default), and asks before installing. Anything you don't give keeps its current setting, or the default on a new install.
+
+```
+./install.sh --location EM20fb --contact W1AW --display-name "W1AW - RetiCast Alerts"
+```
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| `LOCATION` | asks | The default location for visitors; skips the question |
-| `GRID` | | Same as `LOCATION`; still accepted from RetiCast 1.x |
-| `CONTACT` | asks | Your email or callsign; skips the question |
-| `UNITS` | `us` | `us` (F, mph, inHg, miles) or `metric` (C, km/h, hPa, km) |
-| `PROPAGATION_NODE` | none | LXMF propagation node for alert messages to people who are offline |
-| `SCRIPTS_DIR` | `~/scripts` | Where `reticast.py` and its data go |
-| `PAGES_DIR` | `~/.nomadnetwork/storage/pages` | Your NomadNet pages folder |
-| `PYTHON` | output of `which python3` | The Python to use (3.9 or newer) |
+| `--location PLACE` | asks | The default location for visitors |
+| `--contact EMAIL_OR_CALL` | asks | Your email or callsign, for the weather services |
+| `--units us\|metric` | `us` | Units shown on the page |
+| `--display-name NAME` | `RetiCast Alerts` | The name on alert messages |
+| `--propagation-node HASH` | none | Propagation node for alert messages, or `none` |
+| `--scripts-dir DIR` | `~/scripts` | Where the scripts and their data go |
+| `--pages-dir DIR` | `~/.nomadnetwork/storage/pages` | Your NomadNet pages folder |
+| `--python PATH` | output of `which python3` | The Python to use (3.9 or newer) |
+| `--start-after UNIT` | detected | The systemd unit the alert service waits for, or `network`. See [Starting after Reticulum](#starting-after-reticulum) |
+| `-s`, `--silent` | | Install without any questions |
+| `-h`, `--help` | | Show all options |
 
-For example, to install without any questions:
+Options can also be written as `--name=value`. The environment variables from earlier versions (`LOCATION`, `GRID`, `CONTACT`, `UNITS`, `DISPLAY_NAME`, `PROPAGATION_NODE`, `SCRIPTS_DIR`, `PAGES_DIR`, `PYTHON`) still work, and count as options.
+
+### Silent install
+
+`--silent` (or `-s`) installs without asking anything, which suits scripts and automated setups. It uses the options you give, and for everything else:
+
+- **when upgrading**, your current settings, so a silent upgrade never resets anything
+- **on a new install**, the built-in defaults. The installer warns if it had to use the default location (`EM20fb`) or has no contact, since you'll want to set those.
 
 ```
-LOCATION=EM20fb CONTACT=W1AW ./install.sh
+./install.sh --silent                                   # upgrade, keeping every setting
+./install.sh -s --location 77002 --contact W1AW         # new install, no questions
 ```
 
-It's safe to run the installer again, for example to change your default location. When you run it again, it offers your current settings as the defaults, backs up the previous `reticast.py`, keeps visitors' saved places, and doesn't add a second cron job.
+A silent install stops with an error, rather than asking, if an option has a bad value or your pages folder can't be found.
+
+It's safe to run the installer again, for example to change your default location. It backs up the previous scripts, keeps visitors' saved places, and doesn't add a second cron job.
+
+### Changing or resetting settings
+
+Run `./install.sh` with no options. It walks through every setting again, showing your current value in brackets: press Enter to keep it, or type a new value. To go back to a built-in default, type it in:
+
+| Setting | Built-in default |
+| --- | --- |
+| Units | `us` |
+| Alert messages display name | `RetiCast Alerts` |
+| Propagation node | `none` |
+
+The default location and contact have no useful built-in value, so enter your own. You can also change one setting at a time with an option, for example `./install.sh --propagation-node none`.
 
 ## Manual install
 
@@ -144,7 +177,7 @@ It's safe to run the installer again, for example to change your default locatio
 
 ## Upgrading from RetiCast 1.x
 
-Run the 2.0 installer. It reads your 1.x settings (`GRIDSQUARE`, your contact, and units) and offers them as the defaults, so pressing Enter at each question keeps them. The installer also:
+Run the installer. It reads your 1.x settings (`GRIDSQUARE`, your contact, and units) and offers them as the defaults, so pressing Enter at each question keeps them. `./install.sh --silent` keeps them without asking. The installer also:
 
 - backs up your 1.x `reticast.py` as `reticast.py.bak.<date>`
 - replaces the page with the 2.0 version
@@ -258,14 +291,33 @@ Some people use one identity for browsing and another for messaging. If the addr
 
 4. Check that it started with `journalctl -u reticast-notify -n 20`. Within a minute, the Alert messages section appears in My Places.
 
-The service connects to Reticulum like any other program on the machine. If you run `rnsd` or NomadNet as a shared instance, it uses that. If your Reticulum stack has its own startup ordering, add `reticast-notify.service` to it like your other services that need Reticulum.
+The service connects to Reticulum like any other program on the machine. If you run `rnsd` or NomadNet as a shared instance, it uses that.
+
+### Starting after Reticulum
+
+Programs that use Reticulum tend to fail if they start before Reticulum is ready, which is most noticeable after a reboot. So the installer looks at how Reticulum is started on your machine, and has the alert service wait for the same thing:
+
+1. **A readiness gate.** If you use [reticulum-readygate](https://github.com/jwheeler188/reticulum-readygate), the alert service waits for `reticulum-ready.service`, just like NomadNet in that project's example.
+2. **Whatever NomadNet waits for.** If NomadNet's own service waits for another Reticulum service, the alert service waits for that one too.
+3. **The service that runs `rnsd`.** The alert service starts after it. It can still start before Reticulum is fully ready, so the installer suggests a readiness gate.
+4. **Nothing found.** The alert service waits for the network only.
+
+The installer shows what it found in its settings summary, and you can choose yourself with `--start-after`, for example `--start-after reticulum-ready.service`, or `--start-after network`.
+
+If you use stack control scripts like reticulum-readygate's `reloadstack.sh`, `stopstack.sh` and `checkstack.sh`, the installer finds them and offers to add `reticast-notify.service` to their `DEPENDENTS` list, backing each one up first. (A silent install only lists them.) It looks in your home folder, one folder down (such as `~/reticulum-readygate/`), `~/bin`, `~/.local/bin`, `~/scripts` and `/usr/local/bin`.
+
+### Which Python runs the alert service
+
+The alert service needs the `rns` and `lxmf` packages. If Reticulum was installed with `pip --user`, pipx or a virtual environment, the system's `python3` may not be able to import them when systemd starts the service. When that's the case, the installer finds the Python that NomadNet or `rnsd` actually runs with (from their service files, or the first line of those programs) and uses it for the alert service. The settings summary shows it as "Alert Python". The weather page itself needs only Python's standard library, so it keeps using `--python` or `python3`.
+
+When an alert service file is already installed and the new one is different, for example because it now waits for a readiness gate, the installer shows the commands to update it.
 
 ### Reaching people who are offline
 
-Without a propagation node, messages can only reach people whose device is online at the time. To reach everyone, set `PROPAGATION_NODE` to an LXMF propagation node, ideally one that's always on, or on the same machine:
+Without a propagation node, messages can only reach people whose device is online at the time. To reach everyone, use an LXMF propagation node, ideally one that's always on, or on the same machine. Enter it when the installer asks, or give it as an option:
 
 ```
-PROPAGATION_NODE=<address> ./install.sh
+./install.sh --propagation-node <address>
 ```
 
 Then restart the service with `sudo systemctl restart reticast-notify`. The installer remembers the setting when you run it again.
@@ -398,6 +450,12 @@ Run `~/scripts/reticast.py --check`. If the lookup fails, check the spelling of 
 
 **The page shows "saved data - the weather service didn't answer."**
 RetiCast is showing the last good data because an update failed. This usually clears up on its own. If it doesn't, check that the cron job is running with `crontab -l`, and that the node can reach the internet.
+
+**The alert service fails with an import error under systemd, but runs fine by hand.**
+systemd is starting it with a Python that can't import `rns` and `lxmf`. Check the first line of `~/scripts/reticast_notify.py` and the `ExecStart=` line of the service file: both should use the Python that NomadNet runs with. Running the installer again with `--python /path/to/that/python3` sets it.
+
+**The alert service fails to start after a reboot.**
+It probably started before Reticulum was ready. Run the installer again: it looks for a readiness gate and updates the service file to wait for it (then follow the commands it shows). If you don't have a gate yet, [reticulum-readygate](https://github.com/jwheeler188/reticulum-readygate) adds one.
 
 **Visitors can't save places.**
 They need to identify to your node in their client first. The page says "You're browsing as a guest" until they do.

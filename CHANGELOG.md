@@ -8,7 +8,10 @@
 - My Places shows each visitor's LXMF address, whether it has been found on the network, and what happened to their last message (delivered, left at the propagation node, or waiting).
 - Alerts follow the visitor's default location, and the section says so. The place search on My Places has its own "Add a place" heading.
 - New optional service, `reticast_notify.py`, with a ready-made systemd service file from the installer.
-- The installer accepts `PROPAGATION_NODE` and keeps it when upgrading.
+- The alert service's systemd file waits for Reticulum the same way the rest of your stack does: a readiness gate such as reticulum-readygate's `reticulum-ready.service`, whatever NomadNet's service waits for, or the service that runs `rnsd`. Override with `--start-after`. The installer also offers to add the alert service to stack control scripts' `DEPENDENTS` lists, and says when an installed service file is out of date.
+- Long forecast descriptions are no longer cut off mid-word.
+- If the system's `python3` can't import `rns` and `lxmf` (for example, Reticulum is in a virtual environment), the installer runs the alert service with the Python that NomadNet or `rnsd` uses.
+- The installer walks you through each setting, including the alert messages display name and propagation node. Given options (`--location`, `--contact`, `--units`, `--display-name`, `--propagation-node`, and paths), it shows the settings it will use and asks before installing. `--silent` installs without any questions. Upgrades keep all current settings, including the display name and propagation node.
 
 ## 2.0
 

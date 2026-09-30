@@ -916,7 +916,7 @@ def fetch_nws_forecast(meta):
                     "temp": num(p.get("temperature")),
                     "unit": p.get("temperatureUnit") if p.get("temperatureUnit") in ("F", "C") else "F",
                     "pop": round(pop) if pop is not None else None,
-                    "short": clean_name(p.get("shortForecast"), 60),
+                    "short": clean_name(p.get("shortForecast"), 160),
                     "detail": p.get("detailedForecast") if isinstance(p.get("detailedForecast"), str) else ""})
     return out[:14]
 
