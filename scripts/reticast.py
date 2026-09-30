@@ -75,6 +75,10 @@ EXPIRE_FORMAT = "%I%p"             # -> 10PM
 MAX_STATIONS = 3               # nearby NWS stations to try if the closest has no data
 HTTP_TIMEOUT = 8               # seconds per request
 
+# Alert messages (LXMF). These need the separate notifier service,
+# reticast_notify.py; the options only appear on the page while it's running.
+TEST_COOLDOWN_MINUTES = 10     # least time between test/verification messages per visitor
+
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reticast_data")
 
 # =======================================================================
@@ -102,7 +106,7 @@ try:
 except ImportError:          # Python < 3.9: times fall back to UTC
     ZoneInfo = None
 
-VERSION = "2.0"
+VERSION = "2.1"
 DEBUG = "--debug" in sys.argv
 WX_VERSION = 2               # bump when the cached weather format changes
 
@@ -115,6 +119,19 @@ CACHE_DIR = os.path.join(DATA_DIR, "cache")
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
 USERS_LOCK = os.path.join(DATA_DIR, "users.lock")
 SERVER_DEFAULT_FILE = os.path.join(DATA_DIR, "server_default.json")
+NOTIFY_DIR = os.path.join(DATA_DIR, "notify")
+OUTBOX_DIR = os.path.join(NOTIFY_DIR, "outbox")
+HEARTBEAT_FILE = os.path.join(NOTIFY_DIR, "heartbeat.json")
+HEARTBEAT_STALE = 300          # seconds; older than this = notifier not running
+
+# Which alerts each choice includes (an alert's rank must be <= the level's)
+NOTIFY_LEVELS = {"warning": 0, "watch": 1, "advisory": 2, "all": 3}
+NOTIFY_LEVEL_TEXT = {
+    "warning": "Warnings only",
+    "watch": "Warnings and watches",
+    "advisory": "Warnings, watches and advisories",
+    "all": "Everything, including statements",
+}
 
 META_DAYS = 30               # NWS location lookups (county, stations) are reused this long
 GEO_DAYS = 7                 # search results are reused this long
@@ -160,6 +177,7 @@ GRID_RE = re.compile(r"^[A-Ra-r]{2}[0-9]{2}(?:[A-Xa-x]{2}(?:[0-9]{2})?)?$")
 LATLON_RE = re.compile(r"^([+-]?\d{1,3}(?:\.\d+)?)\s*[,\s]\s*([+-]?\d{1,3}(?:\.\d+)?)$")
 ZIP_RE = re.compile(r"^(\d{5})(?:-\d{4})?$")     # 77002 or ZIP+4 77002-1234
 IDENT_RE = re.compile(r"^[0-9a-f]{32,64}$")
+HASH_RE = re.compile(r"^[0-9a-f]{32}$")            # identity hash / LXMF address
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,700}$")
 STATION_RE = re.compile(r"^[A-Za-z0-9]{3,10}$")
 VAR_SAFE_RE = re.compile(r"[^A-Za-z0-9_.,\-]")
@@ -866,10 +884,15 @@ def fetch_nws_alerts(loc):
             continue
         s = lambda k: p.get(k) if isinstance(p.get(k), str) else ""
         fid = f.get("id") if isinstance(f, dict) and isinstance(f.get("id"), str) else ""
+        refs = []
+        for r in p.get("references") or []:
+            if isinstance(r, dict) and isinstance(r.get("identifier"), str):
+                refs.append(r["identifier"])
         alerts.append({"id": s("id") or fid, "event": event, "severity": s("severity"),
                        "headline": s("headline"), "description": s("description"),
                        "instruction": s("instruction"), "ends": s("ends") or s("expires"),
-                       "area": s("areaDesc"), "sender": s("senderName")})
+                       "area": s("areaDesc"), "sender": s("senderName"),
+                       "type": s("messageType"), "refs": refs[:20]})
         if len(alerts) >= 20:
             break
     return alerts
@@ -1128,8 +1151,30 @@ def server_default_loc():
 # users.json maps an identity hash to:
 #   {"default": loc or None, "favorites": [loc, ...], "view": "default"|"overview"}
 
+def new_notify():
+    return {"on": False, "level": "watch", "severe": False, "addr": "",
+            "pending_addr": "", "code": "", "code_ts": 0, "tries": 0, "test_ts": 0}
+
+
 def new_profile():
-    return {"default": None, "favorites": [], "view": "default"}
+    return {"default": None, "favorites": [], "view": "default", "notify": new_notify()}
+
+
+def normalize_notify(n):
+    out = new_notify()
+    if not isinstance(n, dict):
+        return out
+    out["on"] = n.get("on") is True
+    out["level"] = n.get("level") if n.get("level") in NOTIFY_LEVELS else "watch"
+    out["severe"] = n.get("severe") is True
+    for k in ("addr", "pending_addr"):
+        v = n.get(k)
+        out[k] = v if isinstance(v, str) and HASH_RE.match(v) else ""
+    code = n.get("code")
+    out["code"] = code if isinstance(code, str) and re.fullmatch(r"\d{6}", code) else ""
+    for k in ("code_ts", "tries", "test_ts"):
+        out[k] = int(num(n.get(k)) or 0)
+    return out
 
 
 def normalize_profile(p):
@@ -1146,6 +1191,7 @@ def normalize_profile(p):
             out["favorites"].append(loc)
     out["favorites"] = out["favorites"][:MAX_FAVORITES]
     out["view"] = "overview" if p.get("view") == "overview" else "default"
+    out["notify"] = normalize_notify(p.get("notify"))
     out["updated"] = int(num(p.get("updated")) or 0)
     return out
 
@@ -1211,7 +1257,8 @@ def _update_profile(ident, change):
         changed, msg = change(prof)
         if not changed:
             return False, msg
-        empty = not prof["default"] and not prof["favorites"] and prof["view"] == "default"
+        empty = (not prof["default"] and not prof["favorites"] and prof["view"] == "default"
+                 and not prof["notify"]["on"] and not prof["notify"]["addr"])
         if ident not in users and not empty and len(users) >= MAX_USERS:
             return False, "Sorry, this node can't save places for any more visitors."
         if empty:
@@ -1300,6 +1347,206 @@ def act_set_view(mode):
     return change
 
 
+# ============================== alert messages =========================
+
+def lxmf_address(ident_hex):
+    """The LXMF address ("lxmf.delivery" destination) of a Reticulum identity hash.
+
+    Same result as RNS.Destination.hash_from_name_and_identity("lxmf.delivery", ...):
+    the first 16 bytes of SHA-256(name hash + identity hash), where the name hash is
+    the first 10 bytes of SHA-256("lxmf.delivery"). reticast_notify.py checks this
+    against RNS itself at startup.
+    """
+    if not isinstance(ident_hex, str) or not HASH_RE.match(ident_hex):
+        return ""
+    name_hash = hashlib.sha256(b"lxmf.delivery").digest()[:10]
+    return hashlib.sha256(name_hash + bytes.fromhex(ident_hex)).digest()[:16].hex()
+
+
+def message_address(ident, notify):
+    """Where a visitor's alert messages go: their chosen address, or their own."""
+    return notify.get("addr") or lxmf_address(ident)
+
+
+def alert_rank(event):
+    """0 warning, 1 watch, 2 advisory (incl. '... Alert' products), 3 anything else."""
+    e = (event or "").lower()
+    if "warning" in e:
+        return 0
+    if "watch" in e:
+        return 1
+    if "advisory" in e or e.endswith(" alert"):
+        return 2
+    return 3
+
+
+def alert_wanted(notify, alert):
+    """Does this visitor's notification choice include this alert?"""
+    if alert_rank(alert.get("event")) > NOTIFY_LEVELS.get(notify.get("level"), 1):
+        return False
+    if notify.get("severe") and alert.get("severity") not in ("Extreme", "Severe"):
+        return False
+    return True
+
+
+def nws_covered(loc):
+    """True/False if we know whether NWS (and so alerts) covers loc, None if unknown."""
+    if not loc:
+        return False
+    if loc.get("cc"):
+        return loc["cc"] in NWS_COUNTRIES
+    meta = read_json(os.path.join(CACHE_DIR, f"meta_{loc_key(loc)}.json"))
+    if isinstance(meta, dict) and meta.get("provider") in ("nws", "om"):
+        return meta["provider"] == "nws"
+    return None
+
+
+def notifier_status():
+    """(installed, running, heartbeat dict) for the notifier service."""
+    hb = read_json(HEARTBEAT_FILE)
+    if not isinstance(hb, dict):
+        return False, False, {}
+    return True, time.time() - (num(hb.get("ts")) or 0) < HEARTBEAT_STALE, hb
+
+
+def queue_message(kind, ident, addr, **extra):
+    """Hand a one-off message (test / verification) to the notifier."""
+    ensure_dirs()
+    os.makedirs(OUTBOX_DIR, mode=0o700, exist_ok=True)
+    try:
+        if len(os.listdir(OUTBOX_DIR)) >= 200:      # notifier stopped; don't pile up
+            return False
+    except OSError:
+        return False
+    item = {"kind": kind, "ident": ident, "addr": addr, "ts": time.time()}
+    item.update(extra)
+    path = os.path.join(OUTBOX_DIR, f"{int(time.time() * 1000)}-{os.urandom(4).hex()}.json")
+    try:
+        write_json_atomic(path, item)
+        return True
+    except OSError as e:
+        warn(f"cannot queue message: {e}")
+        return False
+
+
+def _cooldown_left(n):
+    return int(TEST_COOLDOWN_MINUTES * 60 - (time.time() - n["test_ts"]))
+
+
+def act_notify_on():
+    def change(p):
+        if p["notify"]["on"]:
+            return False, "Alert messages are already on."
+        if not p["default"]:
+            return False, "Choose a default location first; alerts are sent for it."
+        if nws_covered(p["default"]) is False:
+            return False, "Alert messages are only available for US locations."
+        p["notify"]["on"] = True
+        return True, ("Alert messages are on. Send yourself a test message to make sure "
+                      "they reach you.")
+    return change
+
+
+def act_notify_off():
+    def change(p):
+        if not p["notify"]["on"]:
+            return False, "Alert messages are already off."
+        p["notify"]["on"] = False
+        return True, "Alert messages are off."
+    return change
+
+
+def act_notify_level(level):
+    def change(p):
+        if level not in NOTIFY_LEVELS:
+            return False, "Unknown setting."
+        if p["notify"]["level"] == level:
+            return False, None
+        p["notify"]["level"] = level
+        return True, f"You'll get: {NOTIFY_LEVEL_TEXT[level].lower()}."
+    return change
+
+
+def act_notify_severe(on):
+    def change(p):
+        if p["notify"]["severe"] == on:
+            return False, None
+        p["notify"]["severe"] = on
+        return True, ("Only Severe and Extreme alerts will be sent." if on
+                      else "Alerts of any severity will be sent.")
+    return change
+
+
+def act_notify_test():
+    """Rate-limited; the page queues the message only if this reports a change."""
+    def change(p):
+        left = _cooldown_left(p["notify"])
+        if left > 0:
+            return False, f"Please wait {left // 60 + 1} more minute(s) before sending another."
+        p["notify"]["test_ts"] = int(time.time())
+        return True, "Test message queued. It can take a few minutes to arrive."
+    return change
+
+
+def act_notify_address(ident, addr, code):
+    """Start using a different address: store it as pending and send a code to it."""
+    def change(p):
+        if not HASH_RE.match(addr):
+            return False, "That isn't an LXMF address (32 characters, 0-9 and a-f)."
+        if addr == message_address(ident, p["notify"]):
+            return False, "Messages already go to that address."
+        left = _cooldown_left(p["notify"])
+        if left > 0:
+            return False, f"Please wait {left // 60 + 1} more minute(s) before trying again."
+        n = p["notify"]
+        n.update({"pending_addr": addr, "code": code, "code_ts": int(time.time()),
+                  "tries": 0, "test_ts": int(time.time())})
+        return True, "A 6-digit code is on its way to that address. Enter it below to confirm."
+    return change
+
+
+def act_notify_verify(entered, result=None):
+    """result (a dict) gets result["ok"] = False when the code is wrong or expired."""
+    result = result if result is not None else {}
+
+    def change(p):
+        n = p["notify"]
+        if not n["pending_addr"] or not n["code"]:
+            return False, "There's no address waiting to be confirmed."
+        if time.time() - n["code_ts"] > 24 * 3600 or n["tries"] >= 5:
+            n.update({"pending_addr": "", "code": "", "tries": 0})
+            result["ok"] = False
+            return True, "That code has expired. Please enter the address again."
+        if entered.strip() != n["code"]:
+            n["tries"] += 1
+            result["ok"] = False
+            return True, "That code doesn't match. Please check it and try again."
+        n.update({"addr": n["pending_addr"], "pending_addr": "", "code": "", "tries": 0})
+        return True, "Address confirmed. Alert messages will go there from now on."
+    return change
+
+
+def act_notify_undo_pending(addr):
+    """Used when a verification code couldn't be queued: forget the pending address."""
+    def change(p):
+        n = p["notify"]
+        if n["pending_addr"] != addr:
+            return False, None
+        n.update({"pending_addr": "", "code": "", "tries": 0, "test_ts": 0})
+        return True, None
+    return change
+
+
+def act_notify_reset_address():
+    def change(p):
+        n = p["notify"]
+        if not n["addr"] and not n["pending_addr"]:
+            return False, "Messages already go to your own address."
+        n.update({"addr": "", "pending_addr": "", "code": "", "tries": 0})
+        return True, "Alert messages will go to your own LXMF address."
+    return change
+
+
 # ============================== output pieces ==========================
 
 def alert_key(a):
@@ -1319,6 +1566,12 @@ def display_name(loc, wx):
         area = ", ".join(x for x in (wx["county"], wx.get("state")) if x)
         return f"{area} ({loc['grid']})"
     return loc["name"]
+
+
+def place_name(loc):
+    """display_name() using saved location details (no network), e.g. for grid squares."""
+    meta = read_json(os.path.join(CACHE_DIR, f"meta_{loc_key(loc)}.json"))
+    return display_name(loc, meta if isinstance(meta, dict) else None)
 
 
 def place_subtitle(loc, wx):
@@ -1635,7 +1888,7 @@ def page_places(ident, prof):
     out.append(">>Default location")
     d = prof["default"]
     if d:
-        out.append(f"{esc(d['name'])}  " + "  ".join([
+        out.append(f"{esc(place_name(d))}  " + "  ".join([
             mlink("View", action="view", loc=loc_token(d)),
             mlink("Stop using as default", action="cleardefault", k=loc_key(d))]))
     else:
@@ -1646,7 +1899,7 @@ def page_places(ident, prof):
         out.append("`F888None yet.`f")
     for i, f in enumerate(prof["favorites"]):
         tok = loc_token(f)
-        out.append(f"{i + 1}. {esc(f['name'])}  " + "  ".join([
+        out.append(f"{i + 1}. {esc(place_name(f))}  " + "  ".join([
             mlink("View", action="view", loc=tok),
             mlink("Make default", action="setdefault", loc=tok),
             mlink("Remove", action="delfav", i=i, k=loc_key(f))]))
@@ -1661,7 +1914,70 @@ def page_places(ident, prof):
     if prof["view"] == "overview" and len(prof["favorites"]) + (1 if d else 0) < 2:
         out.append("`F888The overview is used once you have at least 2 saved places.`f")
     out.append("")
+    out += notify_lines(ident, prof)
     out += search_box()
+    return out
+
+
+def notify_lines(ident, prof):
+    """The 'Alert messages' section of My Places."""
+    installed, running, hb = notifier_status()
+    if not installed or not ident or not HASH_RE.match(ident):
+        return []
+    n = prof["notify"]
+    out = [">>Alert messages"]
+    if not running:
+        out.append("`Ffa0The alert message service isn't running right now, so nothing "
+                   "can be sent until it's back.`f")
+    d = prof["default"]
+    if not d:
+        out.append("Choose a default location to get LXMF messages when the National Weather "
+                   "Service issues alerts for it.")
+        return out + [""]
+    covered = nws_covered(d)
+    if covered is False:
+        out.append(f"Alert messages are only available for US locations; your default is "
+                   f"{esc(place_name(d))}.")
+        return out + [""]
+
+    status = "`F8f8On`f" if n["on"] else "`F888Off`f"
+    toggle = mlink("Turn off", action="ntf_off") if n["on"] else mlink("Turn on", action="ntf_on")
+    out.append(f"Messages for {esc(place_name(d))}: {status}  {toggle}")
+    addr = message_address(ident, n)
+    own = "your LXMF address" if not n["addr"] else "an address you chose"
+    out.append(f"Sent to {addr} ({own})")
+    if hb.get("address") and HASH_RE.match(str(hb["address"])):
+        out.append(f"`F888They come from {hb['address']} ({esc(hb.get('name') or 'RetiCast')})."
+                   " Reply STOP to turn them off.`f")
+    out.append("")
+    out.append("Send me:")
+    for level in NOTIFY_LEVELS:
+        text = NOTIFY_LEVEL_TEXT[level]
+        if n["level"] == level:
+            out.append(f"  `F8f8(*) {text}`f")
+        else:
+            out.append(f"  ( ) {mlink(text, action='ntf_level', lv=level)}")
+    if n["severe"]:
+        out.append("  `F8f8[x] Only Severe and Extreme alerts`f  " +
+                   mlink("Change", action="ntf_severe", on=0))
+    else:
+        out.append("  [ ] " + mlink("Only Severe and Extreme alerts", action="ntf_severe", on=1))
+    out.append("")
+    out.append(mlink("Send a test message", action="ntf_test") +
+               "  `F888If it doesn't arrive, your messaging app may use a different "
+               "identity. Enter its LXMF address below.`f")
+    out.append("")
+    if n["pending_addr"]:
+        out.append(f"Waiting to confirm {n['pending_addr']}. Enter the code sent to it:")
+        out.append("`B333`<8|code`>`b  " + mlink("Confirm", fields=["code"], action="ntf_verify") +
+                   "  " + mlink("Cancel", action="ntf_reset"))
+    else:
+        out.append("Use a different LXMF address:")
+        out.append("`B333`<34|lxmf`>`b  " + mlink("Use this address", fields=["lxmf"],
+                                                   action="ntf_addr"))
+    if n["addr"]:
+        out.append(mlink("Go back to my own address", action="ntf_reset"))
+    out.append("")
     return out
 
 
@@ -1765,6 +2081,14 @@ def handle(env):
             prof = get_profile(ident)
             return message_lines(msg, "info" if changed else "warn") + page_places(ident, prof)
 
+    elif action.startswith("ntf_"):
+        if not ident or not HASH_RE.match(ident):
+            msg_lines = need_ident()
+        elif not notifier_status()[0]:
+            msg_lines = message_lines("Alert messages aren't set up on this node.", "warn")
+        else:
+            return handle_notify(action, ident, env)
+
     elif action == "view":
         loc = loc_from_token(env.get("var_loc"))
         if loc:
@@ -1792,6 +2116,47 @@ def handle(env):
         msg_lines = need_ident()
 
     return msg_lines + page_home(ident, prof)
+
+
+def handle_notify(action, ident, env):
+    extra = None
+    result = {"ok": True}
+    if action == "ntf_on":
+        change = act_notify_on()
+    elif action == "ntf_off":
+        change = act_notify_off()
+    elif action == "ntf_level":
+        change = act_notify_level(env.get("var_lv", ""))
+    elif action == "ntf_severe":
+        change = act_notify_severe(env.get("var_on") == "1")
+    elif action == "ntf_test":
+        change = act_notify_test()
+        extra = "test"
+    elif action == "ntf_addr":
+        addr = (env.get("field_lxmf") or "").strip().lower().strip("<>")
+        code = f"{int.from_bytes(os.urandom(4), 'big') % 1000000:06d}"
+        change = act_notify_address(ident, addr, code)
+        extra = ("verify", addr, code)
+    elif action == "ntf_verify":
+        change = act_notify_verify(env.get("field_code") or "", result)
+    elif action == "ntf_reset":
+        change = act_notify_reset_address()
+    else:
+        return message_lines("Unknown setting.", "warn") + page_places(ident, get_profile(ident))
+
+    changed, msg = update_profile(ident, change)
+    prof = get_profile(ident)
+    if changed and extra == "test":
+        if not queue_message("test", ident, message_address(ident, prof["notify"])):
+            changed, msg = False, "The message couldn't be queued. Please try again later."
+    elif changed and isinstance(extra, tuple):
+        _, addr, code = extra
+        if not queue_message("verify", ident, addr, code=code):
+            update_profile(ident, act_notify_undo_pending(addr))
+            prof = get_profile(ident)
+            changed, msg = False, "The code couldn't be sent. Please try again later."
+    ok = changed and result["ok"]
+    return message_lines(msg, "info" if ok else "warn") + page_places(ident, prof)
 
 
 def page_main():
