@@ -5,6 +5,8 @@
 - Alert messages: visitors can get an LXMF message when the National Weather Service issues an alert for their default location. They choose warnings only, warnings and watches, warnings/watches/advisories, or everything, and can limit it to Severe and Extreme alerts.
 - Messages go to the visitor's own LXMF address, worked out from the identity they browse with, or to another address they confirm with a code.
 - Replying STOP turns messages off.
+- My Places shows each visitor's LXMF address, whether it has been found on the network, and what happened to their last message (delivered, left at the propagation node, or waiting).
+- Alerts follow the visitor's default location, and the section says so. The place search on My Places has its own "Add a place" heading.
 - New optional service, `reticast_notify.py`, with a ready-made systemd service file from the installer.
 - The installer accepts `PROPAGATION_NODE` and keeps it when upgrading.
 

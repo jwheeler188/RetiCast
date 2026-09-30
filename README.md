@@ -218,7 +218,7 @@ RetiCast can send visitors an LXMF message whenever the National Weather Service
 
 ### How visitors use it
 
-In **My Places**, visitors with a US default location see an **Alert messages** section, where they can:
+In **My Places**, visitors with a US default location see an **Alert messages** section. Alerts are always for the visitor's default location; to get them for another place, they make it their default. In this section they can:
 
 - turn messages on or off
 - choose what they get: warnings only, warnings and watches (the default), warnings, watches and advisories, or everything including statements
@@ -240,7 +240,9 @@ A tornado warning as it arrived in a visitor's messaging app:
 
 Visitors don't need to type in an LXMF address. When someone identifies to your node, NomadNet tells RetiCast their identity, and their LXMF address is worked out from it. That's the same identity their messaging app uses in most setups.
 
-Some people use one identity for browsing and another for messaging. If their test message doesn't arrive, they can enter their messaging app's LXMF address instead. RetiCast then sends a 6-digit code to that address, and they enter it on the page to confirm it's theirs. Without that step, anyone could send alerts to someone else's address.
+The section shows that address and whether it has been **found on the network**. RetiCast can only send to an address once the visitor's messaging app has announced it. Until then the section says "Not found on the network yet", and RetiCast keeps asking the network for it. Opening the messaging app, so it announces itself, usually fixes this. The section also shows what happened to the visitor's last message: delivered, left at the propagation node, or waiting for the address to be found.
+
+Some people use one identity for browsing and another for messaging. If the address shown isn't the one their messaging app shows, they can enter their app's address instead. RetiCast then sends a 6-digit code to that address, and they enter it on the page to confirm it's theirs. Without that step, anyone could send alerts to someone else's address.
 
 ### Setting it up
 
@@ -404,7 +406,7 @@ They need to identify to your node in their client first. The page says "You're 
 It only appears while the service is running, and only for identified visitors. Check the service with `systemctl status reticast-notify`. The section also explains when a visitor has no default location, or a default outside the US.
 
 **A test message doesn't arrive.**
-The visitor's messaging app may use a different identity than the one they browse with; they can enter the app's LXMF address in My Places. It can also take a few minutes if their address hasn't been heard on the network recently. `journalctl -u reticast-notify` shows each message as it's sent.
+Check the Alert messages section in My Places. If the address says "Not found on the network yet", the visitor's messaging app hasn't announced it; opening the app usually fixes this, and waiting messages are then delivered. If the address shown isn't the one their messaging app shows, they browse with a different identity and can enter the app's address instead. "Last message" shows whether the test was delivered. `journalctl -u reticast-notify` shows each message as it's sent.
 
 **A search finds nothing.**
 Try adding a state or country (`Springfield, IL`), or use a ZIP code, grid square, or coordinates.
