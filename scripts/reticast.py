@@ -122,6 +122,7 @@ SERVER_DEFAULT_FILE = os.path.join(DATA_DIR, "server_default.json")
 NOTIFY_DIR = os.path.join(DATA_DIR, "notify")
 OUTBOX_DIR = os.path.join(NOTIFY_DIR, "outbox")
 HEARTBEAT_FILE = os.path.join(NOTIFY_DIR, "heartbeat.json")
+STATUS_FILE = os.path.join(NOTIFY_DIR, "status.json")   # written by the notifier
 HEARTBEAT_STALE = 300          # seconds; older than this = notifier not running
 
 # Which alerts each choice includes (an alert's rank must be <= the level's)
@@ -1409,6 +1410,63 @@ def notifier_status():
     return True, time.time() - (num(hb.get("ts")) or 0) < HEARTBEAT_STALE, hb
 
 
+def notify_watch_list(users):
+    """Addresses the notifier should look for: everyone who uses or is setting up messages."""
+    addrs = []
+    for ident, raw in (users or {}).items():
+        if not isinstance(ident, str) or not HASH_RE.match(ident):
+            continue
+        prof = normalize_profile(raw)
+        if not prof:
+            continue
+        n = prof["notify"]
+        if not (n["on"] or n["addr"] or n["pending_addr"] or n["test_ts"]):
+            continue
+        for a in (lxmf_address(ident), n["addr"], n["pending_addr"]):
+            if a and a not in addrs:
+                addrs.append(a)
+    return addrs
+
+
+def address_status(running):
+    """What the notifier last reported: {"addresses": {...}, "last": {...}}."""
+    st = read_json(STATUS_FILE) if running else None
+    if not isinstance(st, dict):
+        return {"addresses": {}, "last": {}}
+    return {"addresses": st.get("addresses") if isinstance(st.get("addresses"), dict) else {},
+            "last": st.get("last") if isinstance(st.get("last"), dict) else {}}
+
+
+def _found_text(entry, running):
+    if not running:
+        return "`F888Can't check right now (the alert message service isn't running)`f"
+    if not isinstance(entry, dict):
+        return "`F888Checking the network...`f"
+    if entry.get("known"):
+        return "`F8f8Found on the network`f"
+    return ("`Ffa0Not found on the network yet.`f `F888RetiCast keeps looking. Opening your "
+            "messaging app, so it announces itself, usually fixes this.`f")
+
+
+LAST_STATE_TEXT = {
+    "sending": "sending",
+    "delivered": "delivered",
+    "propagated": "left at the propagation node for your app to pick up",
+    "waiting": "waiting until your address is found on the network",
+    "failed": "couldn't be delivered",
+}
+
+
+def _last_text(entry, tz):
+    if not isinstance(entry, dict) or entry.get("state") not in LAST_STATE_TEXT:
+        return None
+    when = ""
+    if num(entry.get("ts")):
+        when = " (" + fmt_epoch(entry["ts"], "%I:%M%p %m/%d", tz) + ")"
+    title = clean_name(entry.get("title"), 60) or "message"
+    return f"{title}: {LAST_STATE_TEXT[entry['state']]}{when}"
+
+
 def queue_message(kind, ident, addr, **extra):
     """Hand a one-off message (test / verification) to the notifier."""
     ensure_dirs()
@@ -1915,6 +1973,7 @@ def page_places(ident, prof):
         out.append("`F888The overview is used once you have at least 2 saved places.`f")
     out.append("")
     out += notify_lines(ident, prof)
+    out.append(">>Add a place")
     out += search_box()
     return out
 
@@ -1943,13 +2002,31 @@ def notify_lines(ident, prof):
     status = "`F8f8On`f" if n["on"] else "`F888Off`f"
     toggle = mlink("Turn off", action="ntf_off") if n["on"] else mlink("Turn on", action="ntf_on")
     out.append(f"Messages for {esc(place_name(d))}: {status}  {toggle}")
-    addr = message_address(ident, n)
-    own = "your LXMF address" if not n["addr"] else "an address you chose"
-    out.append(f"Sent to {addr} ({own})")
-    if hb.get("address") and HASH_RE.match(str(hb["address"])):
-        out.append(f"`F888They come from {hb['address']} ({esc(hb.get('name') or 'RetiCast')})."
-                   " Reply STOP to turn them off.`f")
+    out.append("`F888Alerts are for your default location. To get them for another place, "
+               "make it your default.`f")
     out.append("")
+
+    st = address_status(running)
+    own = lxmf_address(ident)
+    out.append(f"Your LXMF address: {own}")
+    out.append("  " + _found_text(st["addresses"].get(own), running))
+    out.append("  `F888Worked out from the identity you browse with. If it isn't the address "
+               "your messaging app shows, enter that address below.`f")
+    if n["addr"]:
+        out.append(f"Messages go to: {n['addr']} (an address you confirmed)  " +
+                   mlink("Use my own address instead", action="ntf_reset"))
+        out.append("  " + _found_text(st["addresses"].get(n["addr"]), running))
+    else:
+        out.append("Messages go to this address.")
+    last = _last_text(st["last"].get(message_address(ident, n)),
+                      get_tz((read_json(os.path.join(CACHE_DIR, f"meta_{loc_key(d)}.json")) or {})
+                             .get("tz")))
+    if last:
+        out.append("Last message: " + esc(last))
+    if hb.get("address") and HASH_RE.match(str(hb["address"])):
+        out.append(f"`F888They come from {hb['address']} ({esc(hb.get('name') or 'RetiCast')}).`f")
+    out.append("")
+
     out.append("Send me:")
     for level in NOTIFY_LEVELS:
         text = NOTIFY_LEVEL_TEXT[level]
@@ -1964,19 +2041,17 @@ def notify_lines(ident, prof):
         out.append("  [ ] " + mlink("Only Severe and Extreme alerts", action="ntf_severe", on=1))
     out.append("")
     out.append(mlink("Send a test message", action="ntf_test") +
-               "  `F888If it doesn't arrive, your messaging app may use a different "
-               "identity. Enter its LXMF address below.`f")
+               "  `F888Reply STOP to any message to turn them off.`f")
     out.append("")
     if n["pending_addr"]:
         out.append(f"Waiting to confirm {n['pending_addr']}. Enter the code sent to it:")
+        out.append("  " + _found_text(st["addresses"].get(n["pending_addr"]), running))
         out.append("`B333`<8|code`>`b  " + mlink("Confirm", fields=["code"], action="ntf_verify") +
                    "  " + mlink("Cancel", action="ntf_reset"))
     else:
         out.append("Use a different LXMF address:")
         out.append("`B333`<34|lxmf`>`b  " + mlink("Use this address", fields=["lxmf"],
                                                    action="ntf_addr"))
-    if n["addr"]:
-        out.append(mlink("Go back to my own address", action="ntf_reset"))
     out.append("")
     return out
 

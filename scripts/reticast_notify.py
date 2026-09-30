@@ -283,7 +283,11 @@ class Messenger:
                 self.router.set_outbound_propagation_node(self.propagation)
             else:
                 log(f"PROPAGATION_NODE {PROPAGATION_NODE!r} isn't a valid address; ignoring it")
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()   # callbacks may run while we hold it
+        self.status = {"addresses": {}, "last": {}}     # shown on the My Places page
+        self.status_changed = False
+        self.node_addr = ""                              # set by main(); used in replies
+        self.path_asked = {}
         self.pending = self._load_pending()
         self.replied = {}
         self.announce()
@@ -309,7 +313,36 @@ class Messenger:
             self.pending.append({"addr": addr, "title": title, "body": body,
                                  "first": time.time(), "next_request": 0})
             self._save_pending()
+            self._set_last(addr, title, "waiting")
         self.flush()
+
+    # --- status for the page: is each address known, and how did its last message go ---
+    def _set_last(self, addr, title, state):
+        self.status["last"][addr] = {"title": title, "state": state, "ts": time.time()}
+        self.status_changed = True
+
+    def watch(self, addrs):
+        """Check which addresses are known on the network; keep asking for the rest."""
+        now = time.time()
+        with self.lock:
+            known = {}
+            for a in addrs:
+                h = bytes.fromhex(a)
+                found = RNS.Identity.recall(h) is not None
+                known[a] = {"known": found, "checked": now}
+                if not found and now >= self.path_asked.get(a, 0):
+                    RNS.Transport.request_path(h)
+                    self.path_asked[a] = now + 300
+            self.status["addresses"] = known
+            self.status["last"] = {a: v for a, v in self.status["last"].items()
+                                   if a in known or now - v["ts"] < 86400}
+
+    def save_status(self):
+        with self.lock:
+            data = {"ts": time.time(), "addresses": dict(self.status["addresses"]),
+                    "last": dict(self.status["last"])}
+            self.status_changed = False
+        rc.cache_put(rc.STATUS_FILE, data)
 
     def flush(self):
         """Send pending messages whose recipient is known; ask the network for the rest."""
@@ -324,6 +357,7 @@ class Messenger:
                     changed = True
                 elif now - p["first"] > MAX_WAIT_HOURS * 3600:
                     log(f"Gave up on {p['addr']} (never heard from it): {p['title']}")
+                    self._set_last(p["addr"], p["title"], "failed")
                     changed = True
                 else:
                     if now >= p["next_request"]:
@@ -340,9 +374,19 @@ class Messenger:
         lxm = LXMF.LXMessage(dest, self.source, p["body"], p["title"],
                              desired_method=LXMF.LXMessage.DIRECT)
         lxm.try_propagation_on_fail = self.propagation is not None
+        lxm.reticast_addr, lxm.reticast_title = p["addr"], p["title"]
+        lxm.register_delivery_callback(self._delivered)
         lxm.register_failed_callback(self._failed)
+        self._set_last(p["addr"], p["title"], "sending")
         self.router.handle_outbound(lxm)
         log(f"Sent to {p['addr']}: {p['title']}")
+
+    def _delivered(self, lxm):
+        """Direct: the recipient confirmed it. Propagated: the propagation node took it."""
+        propagated = getattr(lxm, "desired_method", None) == LXMF.LXMessage.PROPAGATED
+        with self.lock:
+            self._set_last(getattr(lxm, "reticast_addr", ""), getattr(lxm, "reticast_title", ""),
+                           "propagated" if propagated else "delivered")
 
     def _failed(self, lxm):
         """Direct delivery failed: hand it to the propagation node once."""
@@ -356,6 +400,9 @@ class Messenger:
             self.router.handle_outbound(lxm)
             log("Direct delivery failed; sent through the propagation node")
         else:
+            with self.lock:
+                self._set_last(getattr(lxm, "reticast_addr", ""),
+                               getattr(lxm, "reticast_title", ""), "failed")
             log("A message could not be delivered")
 
     def on_message(self, lxm):
@@ -370,15 +417,17 @@ class Messenger:
                 if word not in STOP_WORDS:
                     return                   # never get into a loop with another bot
             self.replied[src] = now
+            link = f"{self.node_addr}:{rc.PAGE_PATH}" if self.node_addr else ""
+            where = (f"open RetiCast at {link} and go to My Places." if link
+                     else "go to My Places on RetiCast.")
             if word in STOP_WORDS:
                 n = stop_address(src)
                 log(f"STOP from {src}: turned off for {n} visitor(s)")
-                body = ("RetiCast alert messages are off. You can turn them on again in "
-                        "My Places." if n else
-                        "This address wasn't getting RetiCast alert messages.")
+                body = (f"RetiCast alert messages are off. To turn them on again, {where}"
+                        if n else "This address wasn't getting RetiCast alert messages.")
             else:
                 body = ("This is an automatic weather alert service. Reply STOP to turn off "
-                        "alert messages. To change what you get, visit RetiCast's My Places page.")
+                        f"alert messages. To change what you get, {where}")
             self.queue(src, "RetiCast", body)
         except Exception as e:
             log(f"Error handling a reply: {type(e).__name__}: {e}")
@@ -490,8 +539,9 @@ def main(argv):
     messenger = Messenger()
     self_check(messenger.identity)
     node_addr = node_address()
+    messenger.node_addr = node_addr
     log(f"RetiCast alert messages {rc.VERSION} running. Node link: {node_addr or '(none)'}")
-    last_check = last_announce = last_beat = 0.0
+    last_check = last_beat = last_watch = 0.0
     last_announce = time.time()
     while True:
         try:
@@ -499,6 +549,12 @@ def main(argv):
             if now - last_beat >= 60:
                 write_heartbeat(messenger)
                 last_beat = now
+            if now - last_watch >= 30:
+                messenger.watch(rc.notify_watch_list(rc.load_users()))
+                messenger.save_status()
+                last_watch = now
+            elif messenger.status_changed:
+                messenger.save_status()
             process_outbox(messenger)
             if now - last_check >= CHECK_MINUTES * 60:
                 last_check = now
